@@ -1,30 +1,56 @@
-# OS / editor
+# OS / Editor
 Thumbs.db
+ehthumbs.db
 .DS_Store
-.vscode/
+.DS_Store?
+._*
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
 .idea/
+*.suo
+*.sln
+*.sw?
 
-# build outputs
+# Build outputs & dependencies
 build/
 dist/
+dist-ssr/
 out/
 node_modules/
+target/
+src-tauri/target/
 
-# local env / secrets
+# Local env & logs
 .env
 .env.*
 *.log
+!update.log
 
-# temporary files
+# Temporary files & archives
 *.tmp
 *.bak
 *.swp
-
-# generated artifacts
-coverage/
 *.pdb
 *.exe
+*.7z
+*.zip
+*.reg
 
-# Auto added by sync_to_public
-dist_release
-target
+# Generated artifacts & releases
+dist_release/
+coverage/
+src-tauri/gen/schemas/
+vite.config.ts.timestamp-*.mjs
+
+# Private & Reverse Engineering Assets Boundary
+decompiled/
+probe_scripts/
+.private/
+**/.private/
+
+# Local Development & Release Tooling (Excluded from public repo)
+safe_*.ps1
+run_*.bat
+check_vault_leaks.ps1
+scripts/
