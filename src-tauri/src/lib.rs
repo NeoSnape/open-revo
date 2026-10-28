@@ -8,6 +8,8 @@ pub mod hal;
 pub mod system;
 pub mod updater;
 
+pub use openrevo_core;
+
 use crate::driver::ec_bridge::{EcBridge, SharedEcBridge};
 use crate::driver::gpu_bridge::SharedGpuBridge;
 
@@ -18,6 +20,54 @@ pub use crate::system::tray::{
     update_tray_power_mode, TrayKeeper, TrayMenuControls,
 };
 pub use crate::system::window::{ensure_window_alive, restore_and_sync_window};
+
+struct TauriEventSink {
+    app: tauri::AppHandle,
+}
+
+impl TauriEventSink {
+    fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl openrevo_core::CoreEventSink for TauriEventSink {
+    fn emit(&self, event: &str, payload: serde_json::Value) {
+        use tauri::Emitter;
+        let _ = self.app.emit(event, payload);
+    }
+
+    fn on_osd_notify(&self, feature: &str, value: &str) {
+        crate::system::osd_window::wake_osd_if_enabled(&self.app);
+        use tauri::Emitter;
+        let payload = serde_json::json!({
+            "feature": feature,
+            "value": value
+        });
+        let _ = self.app.emit("osd-notify", payload);
+    }
+
+    fn on_power_mode_changed(&self, mode: u8) {
+        crate::update_tray_power_mode(mode);
+        crate::system::osd_window::wake_osd_if_enabled(&self.app);
+        use tauri::Emitter;
+        let _ = self.app.emit("physical-mode-switched", mode);
+        let _ = self.app.emit_to("main", "physical-mode-switched", mode);
+        let _ = self.app.emit_to("osd", "physical-mode-switched", mode);
+    }
+
+    fn on_fan_boost_changed(&self, enabled: bool) {
+        crate::update_tray_fan_boost(enabled);
+        crate::system::osd_window::wake_osd_if_enabled(&self.app);
+        use tauri::Emitter;
+        let _ = self.app.emit("fan-boost-changed", enabled);
+        let _ = self.app.emit_to("main", "fan-boost-changed", enabled);
+        let _ = self.app.emit_to("osd", "fan-boost-changed", enabled);
+        let _ = self.app.emit("physical-fan-boost-switched", enabled);
+        let _ = self.app.emit_to("main", "physical-fan-boost-switched", enabled);
+        let _ = self.app.emit_to("osd", "physical-fan-boost-switched", enabled);
+    }
+}
 
 pub fn run() {
     // 0. Disable WebView2 background throttling & renderer suspension for HUD overlay and widgets
@@ -313,6 +363,7 @@ pub fn run() {
             commands::watcher_cmd::trigger_watcher_manual,
         ])
         .setup(move |app| {
+            openrevo_core::set_global_event_sink(Arc::new(TauriEventSink::new(app.handle().clone())));
             crate::system::boot_trace::boot_log("SETUP", "Tauri setup closure entered");
             crate::system::actuator::UnifiedPowerActuator::global().bind_app_handle(app.handle().clone());
             crate::system::webview_orchestrator::WebviewOrchestrator::global().bind_app_handle(app.handle().clone());
