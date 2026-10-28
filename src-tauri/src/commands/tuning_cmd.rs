@@ -1009,6 +1009,7 @@ pub fn get_models_file_path() -> String {
 
 #[tauri::command]
 pub fn reload_model_profiles() -> Result<crate::system::power_mode::FactoryPowerPresets, String> {
+    crate::system::model_engine::invalidate_model_cache();
     let presets = crate::system::power_mode::refresh_factory_power_presets(true);
     Ok(presets)
 }

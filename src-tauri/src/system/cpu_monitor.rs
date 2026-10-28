@@ -650,6 +650,10 @@ pub fn get_global_cpu_monitor() -> Arc<CpuMonitor> {
 /// 105°C for Intel Core Ultra 200 (Arrow Lake), Core Ultra 100 (Meteor Lake), Lunar Lake,
 /// and 100°C standard baseline for legacy/standard Intel and AMD mobile processors.
 pub fn get_cpu_native_tjmax() -> u8 {
+    // i7-14650HX (Raptor Lake-HX Refresh): TjMax 100 °C.
+    if crate::machine::is_target_machine() {
+        return crate::machine::CPU_TJMAX_C;
+    }
     let cfg = crate::system::config::load_config();
     if let Some(tj) = cfg.cpu_tjmax {
         if (85..=115).contains(&tj) {

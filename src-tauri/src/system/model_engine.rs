@@ -548,8 +548,25 @@ pub fn sync_active_machine_profile(profiles: &mut Vec<ModelProfile>) -> bool {
 
 /// Retrieve the active machine profile (guaranteed to be mine: true at index 0)
 pub fn get_active_profile() -> Option<ModelProfile> {
-    let profiles = load_model_profiles();
-    profiles.into_iter().find(|p| p.mine)
+    if let Some(cached) = ACTIVE_PROFILE_CACHE.read().as_ref() {
+        return cached.clone();
+    }
+    let active = load_model_profiles().into_iter().find(|p| p.mine);
+    *ACTIVE_PROFILE_CACHE.write() = Some(active.clone());
+    active
+}
+
+// models.json + the embedded builtin list are ~340 KB of JSON plus ~14 EC reads to re-sync;
+// upstream re-ran all of it twice a second from the lighting idle watcher (upstream #135).
+static MODEL_CACHE: parking_lot::RwLock<Option<Vec<ModelProfile>>> = parking_lot::RwLock::new(None);
+static ACTIVE_PROFILE_CACHE: parking_lot::RwLock<Option<Option<ModelProfile>>> = parking_lot::RwLock::new(None);
+static LIGHTING_CONTRACT_CACHE: parking_lot::RwLock<Option<LightingContract>> = parking_lot::RwLock::new(None);
+
+/// Drop cached model profiles / lighting contract (after models.json edits or device changes).
+pub fn invalidate_model_cache() {
+    *MODEL_CACHE.write() = None;
+    *ACTIVE_PROFILE_CACHE.write() = None;
+    *LIGHTING_CONTRACT_CACHE.write() = None;
 }
 
 /// Retrieve the active machine alias (customized by user in models.json, or BIOS full name)
@@ -576,6 +593,15 @@ pub fn get_active_alias() -> String {
 
 /// Load model profiles from %APPDATA%\OpenRevo\models.json (creates file if missing, keeps mine: true at index 0)
 pub fn load_model_profiles() -> Vec<ModelProfile> {
+    if let Some(cached) = MODEL_CACHE.read().as_ref() {
+        return cached.clone();
+    }
+    let profiles = load_model_profiles_uncached();
+    *MODEL_CACHE.write() = Some(profiles.clone());
+    profiles
+}
+
+fn load_model_profiles_uncached() -> Vec<ModelProfile> {
     let path = get_models_file_path();
     let mut profiles = if !path.exists() {
         get_builtin_profiles()
@@ -630,6 +656,7 @@ pub fn save_model_profiles(profiles: &[ModelProfile]) -> Result<(), String> {
     let path = get_models_file_path();
     let json = serde_json::to_string_pretty(profiles).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    invalidate_model_cache();
     Ok(())
 }
 
@@ -977,11 +1004,16 @@ pub fn get_active_gpu_mux_contract() -> GpuMuxContract {
 
 /// Retrieve the active Lighting contract
 pub fn get_active_lighting_contract() -> LightingContract {
-    if let Some(prof) = get_active_profile() {
+    if let Some(c) = LIGHTING_CONTRACT_CACHE.read().as_ref() {
+        return c.clone();
+    }
+    let contract = if let Some(prof) = get_active_profile() {
         TruthReconstructor::probe_lighting(&prof.keyboard_type)
     } else {
         TruthReconstructor::probe_lighting("TypeA")
-    }
+    };
+    *LIGHTING_CONTRACT_CACHE.write() = Some(contract.clone());
+    contract
 }
 
 /// Retrieve the active Takeover contract

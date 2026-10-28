@@ -12,6 +12,9 @@ pub const BOARD_NAME: &str = "KUANGSHI-JIGUANG Series-X6xx57TW";
 /// EC project id reported by this board.
 pub const EC_PROJECT_ID: u8 = 26;
 
+/// i7-14650HX junction temperature limit (°C); the EC temp wall is encoded as an offset from it.
+pub const CPU_TJMAX_C: u8 = 100;
+
 /// GPU power envelope (W).
 pub const GPU_CTGP_FLOOR_W: u8 = 65;
 pub const GPU_BASE_TGP_MAX_W: u8 = 115;
