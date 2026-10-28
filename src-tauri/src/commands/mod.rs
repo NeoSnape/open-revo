@@ -3,6 +3,7 @@
 
 pub mod brfx_presets;
 pub mod display_cmd;
+pub mod fan_cmd;
 pub mod hardware_cmd;
 pub mod lighting_cmd;
 pub mod power_cmd;

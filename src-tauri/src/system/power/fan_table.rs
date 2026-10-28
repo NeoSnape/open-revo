@@ -185,6 +185,19 @@ pub fn apply_fan_table_to_ec(table: &FanTableData) {
         }
     }
 
+    // Read back the duty rows so the log shows whether the EC kept what was written.
+    let cpu_addrs: Vec<u16> = (0..16).map(|i| wmi_ec::ADDR_RAMFAN_CPU_DUTY_BASE + i).collect();
+    let gpu_addrs: Vec<u16> = (0..13).map(|i| wmi_ec::ADDR_RAMFAN_GPU_DUTY_BASE + i).collect();
+    let cpu_back = wmi_ec::wmi_batch_read_ec(&cpu_addrs);
+    let gpu_back = wmi_ec::wmi_batch_read_ec(&gpu_addrs);
+    let cpu_ok = cpu_back.as_deref().map(|b| b[1..] == table.cpu_duty[1..]).unwrap_or(false);
+    let gpu_ok = gpu_back.as_deref().map(|b| b[1..] == table.gpu_duty[1..13]).unwrap_or(false);
+    if cpu_ok && gpu_ok {
+        crate::log_info!("POWER_MODE", "Fan table readback verified");
+    } else {
+        crate::log_warn!("POWER_MODE", "Fan table readback mismatch: cpu={:?} gpu={:?}", cpu_back, gpu_back);
+    }
+
     crate::log_info!(
         "POWER_MODE",
         "Full fan table committed to EC RAM (UpT/DownT thresholds + Duties, fan table latch committed):\n  CPU Duty: {:?}\n  GPU Duty: {:?}",
