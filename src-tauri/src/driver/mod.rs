@@ -1,4 +1,3 @@
-pub mod ble_cooler;
 pub mod ec_bridge;
 pub mod gpu_bridge;
 pub mod lighting;

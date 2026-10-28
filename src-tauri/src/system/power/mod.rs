@@ -448,22 +448,6 @@ pub fn spawn_hardware_state_restore(ec_for_restore: crate::driver::ec_bridge::Sh
         if cfg.high_perf_scheme {
             crate::system::power_mode::apply_windows_power_overlay(cfg.power_mode);
         }
-        // Water cooler module check: user manual override or physical EC detection
-        let is_water_cooler = crate::system::config::is_water_cooler_enabled();
-        if is_water_cooler {
-            let cooler = crate::driver::ble_cooler::get_global_cooler();
-            if !cooler.get_telemetry().connected {
-                if let Some(paired) = crate::driver::ble_cooler::find_paired_water_cooler_mac() {
-                    if cooler.get_mac() != paired {
-                        crate::log_info!("POWER_RESTORE", "Boot restored water cooler target MAC to Windows PnP paired device: {:012X}", paired);
-                        cooler.set_mac(paired);
-                    }
-                }
-            }
-            cooler.resume_after_wake();
-            cooler.start_active_cooling();
-        }
-
         // Restore lighting presets seamlessly on startup
         std::thread::sleep(std::time::Duration::from_millis(600));
         let lighting = crate::driver::ite_lighting::get_global_lighting();

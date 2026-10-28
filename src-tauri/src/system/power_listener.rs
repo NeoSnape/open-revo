@@ -85,12 +85,6 @@ fn handle_system_resume_pipeline(event_name: &str) {
     handle_wake_auto_office();
 
     std::thread::spawn(|| {
-        let cooler = crate::driver::ble_cooler::get_global_cooler();
-        cooler.resume_after_wake();
-        cooler.start_active_cooling();
-    });
-
-    std::thread::spawn(|| {
         crate::driver::ite_lighting::get_global_lighting().resume_after_wake();
         std::thread::sleep(std::time::Duration::from_millis(500));
         crate::system::display_tuning::init_display_tuning();
@@ -179,7 +173,6 @@ unsafe extern "system" fn power_wnd_proc(
                     println!("[Power Guard] System is entering Sleep / Hibernate / Standby! Stopping water cooler & suspending lighting...");
                     crate::system::telemetry::set_screen_suspended(true);
                     handle_sleep_auto_office();
-                    crate::driver::ble_cooler::get_global_cooler().stop_and_shutdown();
                     let streamer = crate::driver::ite_streamer::get_global_streamer();
                     streamer.suspend_for_sleep();
                     let lighting = crate::driver::ite_lighting::get_global_lighting();
@@ -209,7 +202,6 @@ unsafe extern "system" fn power_wnd_proc(
                                 } else {
                                     println!("[Power Guard] Laptop lid closed! Switching to office & stopping water cooler...");
                                     handle_sleep_auto_office();
-                                    crate::driver::ble_cooler::get_global_cooler().stop_and_shutdown();
                                     let streamer = crate::driver::ite_streamer::get_global_streamer();
                                     streamer.suspend_for_sleep();
                                     let lighting = crate::driver::ite_lighting::get_global_lighting();
@@ -233,7 +225,6 @@ unsafe extern "system" fn power_wnd_proc(
             crate::system::telemetry::set_screen_suspended(true);
             crate::system::display_tuning::reset_display_tuning_to_default();
             if !crate::hal::platform_probe::is_ultrabook() {
-                crate::driver::ble_cooler::get_global_cooler().stop_and_shutdown();
                 crate::driver::ite_streamer::get_global_streamer().suspend_for_sleep();
                 let lighting = crate::driver::ite_lighting::get_global_lighting();
                 lighting.turn_off_all();

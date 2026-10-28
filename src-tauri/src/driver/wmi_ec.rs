@@ -616,7 +616,7 @@ pub fn get_hardware_support_flags() -> HardwareSupportFlags {
             (b & MASK_LIQUID_COOLING_SUPPORT) != 0 || (raw_cooler_status & 0x10) != 0
         } else {
             (raw_cooler_status & 0x10) != 0
-        } || crate::driver::ble_cooler::find_paired_water_cooler_mac().is_some();
+        };
 
         if let Some(bytes) = wmi_batch_read_ec(&[ADDR_SUPPORT_BYTE1, ADDR_SUPPORT_BYTE2]) {
             if bytes.len() == 2 {

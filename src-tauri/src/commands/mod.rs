@@ -2,7 +2,6 @@
 // Modularized IPC commands mirroring frontend feature architecture.
 
 pub mod brfx_presets;
-pub mod cooler_cmd;
 pub mod display_cmd;
 pub mod hardware_cmd;
 pub mod lighting_cmd;
@@ -16,7 +15,6 @@ pub mod shortcut_cmd;
 pub mod raw_ec_cmd;
 pub mod watcher_cmd;
 
-pub use cooler_cmd::*;
 pub use display_cmd::*;
 pub use lighting_cmd::*;
 pub use power_cmd::*;

@@ -265,15 +265,6 @@ pub fn toggle_oem_service(
     if take_over {
         let _ = service_mgr::pause_oem_services();
 
-        let has_cooler = crate::system::config::is_water_cooler_enabled();
-        if has_cooler {
-            std::thread::spawn(|| {
-                std::thread::sleep(std::time::Duration::from_millis(600));
-                let cooler = crate::driver::ble_cooler::get_global_cooler();
-                cooler.start_active_cooling();
-            });
-        }
-
         std::thread::spawn(|| {
             std::thread::sleep(std::time::Duration::from_millis(600));
             let lighting = crate::driver::ite_lighting::get_global_lighting();
