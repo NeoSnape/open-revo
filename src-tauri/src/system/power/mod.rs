@@ -9,7 +9,7 @@ pub use arbiter::{PowerArbiter, PowerIntentSource};
 pub use ec_mode::apply_ec_hardware_mode;
 pub use fan_table::{
     apply_fan_table_to_ec, apply_mode_fan_table, build_custom_fan_table, get_mode_fan_table,
-    FanTableData, ModelFanTables, FAN_TABLE_GAMING, FAN_TABLE_OFFICE, FAN_TABLE_TURBO,
+    FanTableData, ModelFanTables,
 };
 pub use oem_sync::{sync_oem_main_option, sync_oem_mode4_profile};
 pub use ppm::{

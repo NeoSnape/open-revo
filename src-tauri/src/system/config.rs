@@ -206,6 +206,14 @@ pub struct AppConfig {
     #[serde(default = "default_active_profile_id")]
     pub active_profile_id: String,
 
+    /// Fan table used by the preset modes: "tuned" (this fork's per-mode curves) | "official" (OEM EC default).
+    #[serde(default = "default_preset_fan_policy")]
+    pub preset_fan_policy: String,
+
+    /// Global hotkeys (Ctrl+Shift+F/M/R). Off by default: they collide with VS Code / browsers.
+    #[serde(default)]
+    pub shortcuts_enabled: bool,
+
     // Builtin & Extension Module Toggles (Persisted in config.json)
     // Allows safe-mode isolation and fine-grained user control of tabs/plugins
     #[serde(default = "default_module_toggles")]
@@ -226,6 +234,10 @@ pub struct AppConfig {
     // Currently active custom background / wallpaper plugin ID (if any)
     #[serde(default)]
     pub active_background: Option<String>,
+}
+
+fn default_preset_fan_policy() -> String {
+    crate::machine::FAN_POLICY_TUNED.to_string()
 }
 
 fn default_module_toggles() -> std::collections::HashMap<String, bool> {
@@ -469,6 +481,8 @@ impl Default for AppConfig {
 
             custom_profile: CustomProfileConfig::default(),
             active_profile_id: default_active_profile_id(),
+            preset_fan_policy: default_preset_fan_policy(),
+            shortcuts_enabled: false,
             launch_visible: false,
             gpu_offset_step: default_gpu_offset_step(),
             gpu_core_offset_max: default_gpu_core_offset_max(),

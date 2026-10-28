@@ -386,7 +386,7 @@ pub fn mulong_read_ec(addr: u16) -> Option<u8> {
 
 /// Writes a 1-byte register to EC RAM via native WMI AcpiTest_MULong.GetSetULong
 pub fn mulong_write_ec(addr: u16, val: u8) -> bool {
-    if !is_mulong_available() {
+    if !crate::machine::is_target_machine() || !is_mulong_available() {
         return false;
     }
     let worker = match WORKER.as_ref() {

@@ -2,29 +2,8 @@ use super::fan_table::{apply_fan_table_to_ec, apply_mode_fan_table, build_custom
 
 /// Set Physical Motherboard EC Hardware Registers
 pub fn apply_ec_hardware_mode(ui_mode: u8) {
-    // 0. If current driver is Declarative and DOES NOT use Tongfang ACPI kernel driver channel,
-    // route performance mode application via HAL and avoid poking legacy registers.
-    // If Tongfang ACPI hardware channel is available (both gaming laptops and Tongfang ultrabooks like Wujie 14X/15X),
-    // we MUST proceed with writing native Tongfang EC registers (APExist, MODE_INDEX, TRIGGER_BYTE, etc.)!
-    let is_tongfang_hardware = crate::driver::wmi_ec::is_acpi_driver_available()
-        || crate::hal::declarative::load_matched_manifest()
-            .map(|m| m.channels.values().any(|c| matches!(c, crate::hal::declarative::model_manifest::ChannelDef::AcpiIoctl { .. })))
-            .unwrap_or(false);
-
-    if !is_tongfang_hardware {
-        let hw_mode = match ui_mode {
-            1 => crate::hal::HardwarePowerMode::Office,
-            2 => crate::hal::HardwarePowerMode::Balance,
-            3 => crate::hal::HardwarePowerMode::Turbo,
-            4 => crate::hal::HardwarePowerMode::Custom,
-            _ => crate::hal::HardwarePowerMode::Balance,
-        };
-        let hal = crate::hal::get_hardware_driver();
-        if let Err(e) = hal.set_performance_mode(hw_mode) {
-            crate::log_warn!("POWER_MODE", "HAL set_performance_mode failed: {}", e);
-        } else {
-            crate::log_info!("POWER_MODE", "Successfully applied power mode via HAL ({:?})", hal.kind());
-        }
+    if !crate::machine::is_target_machine() {
+        crate::log_error!("POWER_MODE", "Refusing to apply power mode {}: not the target machine", ui_mode);
         return;
     }
 
@@ -130,28 +109,8 @@ pub fn apply_ec_hardware_mode(ui_mode: u8) {
                 crate::log_info!("POWER_MODE", "Office Mode: Yielding PL1/PL2/PL4 directly to EC native factory table. Zero manual override.");
             }
 
-            // 5. Dynamic GPU DB & TGP (Eco / Quiet Baseline)
-            // Neutralize any GPU overclocking offsets applied in Custom Mode (only if discrete GPU is present)
-            if crate::driver::gpu_bridge::is_nvidia_dgpu_available() {
-                let _ = crate::driver::nvapi::reset_gpu_clock_offsets();
-                let gpu = crate::driver::gpu_bridge::get_global_gpu();
-                gpu.lock().set_clock_offsets(0, 0);
-
-                let gpu_caps = crate::driver::gpu_bridge::probe_gpu_tuning_capabilities();
-                if gpu_caps.supports_gpu_tuning {
-                    let actuator = crate::system::actuator::UnifiedPowerActuator::global();
-                    let floor = gpu_caps.ctgp_floor_watts as u8;
-                    let max_base = gpu_caps.base_tgp_max_watts as u8;
-                    let max_offset = max_base.saturating_sub(floor);
-                    let _ = actuator.apply_gpu_state(
-                        Some(false),
-                        Some(false),
-                        Some(0),
-                        Some(max_offset),
-                        "Office Mode Eco Baseline",
-                    );
-                }
-            }
+            // 5. GPU power envelope for this preset (official values, see machine.rs)
+            apply_preset_gpu(ui_mode);
 
             // 6. Fan Transition Speed (0x83 = enable smoothing filter at 300ms/0.5%)
             wmi_ec::set_custom_mode_ec(false);
@@ -203,29 +162,8 @@ pub fn apply_ec_hardware_mode(ui_mode: u8) {
                 crate::log_info!("POWER_MODE", "Balanced Mode: Yielding PL1/PL2/PL4 directly to EC native factory table. Zero manual override.");
             }
 
-            // 5. Dynamic GPU DB & TGP (Full factory Base TGP and DB capacity, discrete GPU only)
-            // Neutralize any GPU overclocking offsets applied in Custom Mode
-            if crate::driver::gpu_bridge::is_nvidia_dgpu_available() {
-                let _ = crate::driver::nvapi::reset_gpu_clock_offsets();
-                let gpu = crate::driver::gpu_bridge::get_global_gpu();
-                gpu.lock().set_clock_offsets(0, 0);
-
-                let gpu_caps = crate::driver::gpu_bridge::probe_gpu_tuning_capabilities();
-                if gpu_caps.supports_gpu_tuning {
-                    let actuator = crate::system::actuator::UnifiedPowerActuator::global();
-                    let db = gpu_caps.max_db_watts.clamp(5, 35) as u8;
-                    let floor = gpu_caps.ctgp_floor_watts as u8;
-                    let max_base = gpu_caps.base_tgp_max_watts as u8;
-                    let max_offset = max_base.saturating_sub(floor);
-                    let _ = actuator.apply_gpu_state(
-                        Some(false),
-                        Some(true),
-                        Some(db),
-                        Some(max_offset),
-                        "Balanced Mode Factory Baseline",
-                    );
-                }
-            }
+            // 5. GPU power envelope for this preset (official values, see machine.rs)
+            apply_preset_gpu(ui_mode);
 
             // 6. Fan Transition Speed (0x83 = enable smoothing filter at 300ms/0.5%)
             wmi_ec::set_custom_mode_ec(false);
@@ -276,29 +214,8 @@ pub fn apply_ec_hardware_mode(ui_mode: u8) {
                 crate::log_info!("POWER_MODE", "Turbo Mode: Yielding PL1/PL2/PL4 directly to EC native factory table. Zero manual override.");
             }
 
-            // 5. Dynamic GPU DB & TGP (Full factory Base TGP and DB capacity, discrete GPU only)
-            // Neutralize any GPU overclocking offsets applied in Custom Mode
-            if crate::driver::gpu_bridge::is_nvidia_dgpu_available() {
-                let _ = crate::driver::nvapi::reset_gpu_clock_offsets();
-                let gpu = crate::driver::gpu_bridge::get_global_gpu();
-                gpu.lock().set_clock_offsets(0, 0);
-
-                let gpu_caps = crate::driver::gpu_bridge::probe_gpu_tuning_capabilities();
-                if gpu_caps.supports_gpu_tuning {
-                    let actuator = crate::system::actuator::UnifiedPowerActuator::global();
-                    let db = gpu_caps.max_db_watts.clamp(5, 35) as u8;
-                    let floor = gpu_caps.ctgp_floor_watts as u8;
-                    let max_base = gpu_caps.base_tgp_max_watts as u8;
-                    let max_offset = max_base.saturating_sub(floor);
-                    let _ = actuator.apply_gpu_state(
-                        Some(true),
-                        Some(true),
-                        Some(db),
-                        Some(max_offset),
-                        "Turbo Mode Full Assertion",
-                    );
-                }
-            }
+            // 5. GPU power envelope for this preset (official values, see machine.rs)
+            apply_preset_gpu(ui_mode);
 
             // 6. Fan Transition Speed: 0x00 (Zero latency instantaneous turbo fan response)
             wmi_ec::set_custom_mode_ec(false);
@@ -345,7 +262,7 @@ pub fn apply_ec_hardware_mode(ui_mode: u8) {
             }
 
             // Physical Q-Key LED: Custom Mode (preserve Bit 3 AC Recovery) - Gaming laptops only
-            if !crate::hal::platform_probe::is_ultrabook() {
+            {
                 if let Some(v) = wmi_ec::wmi_read_ec(wmi_ec::ADDR_AC_RECOVERY) {
                     wmi_ec::wmi_write_ec(wmi_ec::ADDR_AC_RECOVERY, v | wmi_ec::MASK_QKEY_WHITE_1830);
                 } else {
@@ -412,17 +329,8 @@ pub fn apply_ec_hardware_mode(ui_mode: u8) {
             }
 
             // 1. CPU Power limits & Thermals
-            let is_cpu_tuning_disabled = crate::hal::declarative::load_matched_manifest()
-                .map(|m| m.capabilities.cpu_tuning_type.as_deref() == Some("none"))
-                .unwrap_or(false);
-
-            if is_cpu_tuning_disabled {
-                wmi_ec::set_cpu_temp_target(false, 95);
-                crate::log_info!("POWER_MODE", "Custom Mode: Ultrabook CPU tuning disabled in manifest. Yielding PL limits to EC native factory table (e.g. 65W).");
-            } else {
-                wmi_ec::set_custom_pl_limits(profile.cpu_pl1_watts, profile.cpu_pl2_watts, profile.cpu_pl4_watts);
-                wmi_ec::set_cpu_temp_target(profile.cpu_temp_target_enabled, profile.cpu_temp_target);
-            }
+            wmi_ec::set_custom_pl_limits(profile.cpu_pl1_watts, profile.cpu_pl2_watts, profile.cpu_pl4_watts);
+            wmi_ec::set_cpu_temp_target(profile.cpu_temp_target_enabled, profile.cpu_temp_target);
 
             // 2. GPU Power State: Atomically assert Base TGP, Dynamic Boost and cTGP via Unified Power Actuator
             // Strictly respects user's custom profile from config.json (DB enabled/disabled, Super Performance, etc.)
@@ -573,4 +481,26 @@ pub fn apply_ec_hardware_mode(ui_mode: u8) {
             );
         }
     }
+}
+
+/// Assert the GPU power state the official control center uses for a preset mode.
+/// Clock offsets are only reset when this app applied some (keeps third-party OC tools untouched).
+fn apply_preset_gpu(ui_mode: u8) {
+    if !crate::driver::gpu_bridge::is_nvidia_dgpu_available() {
+        return;
+    }
+    let gpu = crate::driver::gpu_bridge::get_global_gpu();
+    let g = gpu.lock();
+    if g.get_core_offset() != 0 || g.get_mem_offset() != 0 {
+        g.set_clock_offsets(0, 0);
+    }
+    drop(g);
+    let st = crate::machine::preset_gpu_state(ui_mode);
+    let _ = crate::system::actuator::UnifiedPowerActuator::global().apply_gpu_state(
+        Some(st.super_perf),
+        Some(st.db_enabled),
+        Some(st.db_watts),
+        Some(st.ctgp_offset),
+        "Preset mode GPU envelope",
+    );
 }

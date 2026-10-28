@@ -5,6 +5,7 @@ use tauri::Manager;
 pub mod commands;
 pub mod driver;
 pub mod hal;
+pub mod machine;
 pub mod system;
 
 

@@ -142,6 +142,9 @@ pub fn raw_driver_read_ec(addr: u16) -> Option<u8> {
 
 /// Direct Win32 IOCTL call to \\.\ACPIDriver for single EC register write (with AcpiTest_MULong WMI fallback)
 pub fn raw_driver_write_ec(addr: u16, val: u8) -> bool {
+    if !crate::machine::is_target_machine() {
+        return false;
+    }
     if is_acpi_driver_available() {
         unsafe {
             let name = crate::hal::vault::driver::get_driver_path_null_terminated();
@@ -248,6 +251,9 @@ pub fn raw_driver_batch_read_ec(addrs: &[u16]) -> Option<Vec<u8>> {
 
 /// Direct Win32 IOCTL batch write to \\.\ACPIDriver (with AcpiTest_MULong fallback)
 pub fn raw_driver_batch_write_ec(entries: &[(u16, u8)]) -> bool {
+    if !crate::machine::is_target_machine() {
+        return false;
+    }
     if is_acpi_driver_available() {
         unsafe {
             let name = crate::hal::vault::driver::get_driver_path_null_terminated();
@@ -309,7 +315,7 @@ pub fn wmi_write_ec_batch(entries: &[(u16, u8)]) -> bool {
     }
     let mut ok = true;
     for &(addr, val) in entries {
-        if !wmi_write_ec(addr, val) {
+        if !raw_driver_write_ec(addr, val) {
             ok = false;
         }
     }

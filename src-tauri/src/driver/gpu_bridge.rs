@@ -1040,140 +1040,23 @@ pub fn probe_gpu_tuning_capabilities() -> GpuTuningCapabilities {
         }
     }
     let gen = extract_gpu_generation(&gpu_name);
-    let is_dgpu = is_nvidia_dgpu_available();
 
-    // 1. Hardware Truth: Verify physical discrete GPU silicon presence first
-    if !is_dgpu {
-        return GpuTuningCapabilities {
-            gpu_generation: gen,
-            gpu_name,
-            supports_gpu_tuning: false,
-            supports_db: false,
-            supports_ctgp: false,
-            is_full_power: false,
-            ctgp_floor_watts: 0,
-            base_tgp_max_watts: 0,
-            max_db_watts: 0,
-            max_total_tgp: 0,
-            is_pending: false,
-        };
-    }
-
-    // 2. Chassis & Generation Gatekeeper:
-    // Pascal/Turing GPUs (GTX 10/16-series, RTX 20-series) or Legacy Tongfang chassis
-    // physically lack Dynamic Boost / cTGP EC protocol support!
-    // In legacy chassis, EC registers 1859..1863 are MyFan2 fan speed PWM tables.
-    // Writing DB commands to them corrupts the fan curve and causes violent RPM surging!
-    if crate::hal::platform_probe::is_legacy_pascal_turing_tongfang() || (gen <= 20 && gen > 0) {
-        crate::log_info!(
-            "GPU_TUNING",
-            "Legacy architecture detected (chassis_legacy={}, gpu_gen={}): DB/cTGP EC tuning permanently bypassed to protect fan table.",
-            crate::hal::platform_probe::is_legacy_pascal_turing_tongfang(),
-            gen
-        );
-        return GpuTuningCapabilities {
-            gpu_generation: gen,
-            gpu_name,
-            supports_gpu_tuning: false,
-            supports_db: false,
-            supports_ctgp: false,
-            is_full_power: false,
-            ctgp_floor_watts: 0,
-            base_tgp_max_watts: 0,
-            max_db_watts: 0,
-            max_total_tgp: 0,
-            is_pending: false,
-        };
-    }
-
-    let (def_w, max_w) = query_nvidia_power_limits_static().unwrap_or((0, 0));
-
-    // Authoritative Hardware Physical DB Capacity:
-    // When total capacity max_w <= 115W (standard 115W tier, e.g. RTX 5060/4060 115W), hardware physical envelope is strictly 100W Base + 15W DB.
-    // When total capacity max_w > 115W (e.g. 140W full-power tier), hardware physical envelope is 115W Base + 25W DB.
-    // NEVER read dynamic runtime setpoint register ADDR_DB_WATTS1 (which holds the active user/system slider value, e.g. 5W when DB is OFF)!
-    let hardware_db_cap: u32 = if max_w <= 115 && max_w > 0 {
-        15
-    } else {
-        25
-    };
-
-    if def_w > 0 && max_w > 0 {
-        // Universal Zero-Hardcoding Mathematical Algorithm:
-        let delta = max_w.saturating_sub(def_w) as u32;
-
-        if delta > 0 && delta <= 25 {
-            // Standard discrete envelope where default_limit == Base TGP (e.g. RTX 4080/4090 or fixed-power cards)
-            let full_base = def_w as u32;
-            let full_total = max_w as u32;
-            let full_db = delta;
-            GpuTuningCapabilities {
-                gpu_generation: gen,
-                gpu_name,
-                supports_gpu_tuning: true,
-                supports_db: true,
-                supports_ctgp: false,
-                is_full_power: true,
-                ctgp_floor_watts: full_base,
-                base_tgp_max_watts: full_base,
-                max_db_watts: full_db,
-                max_total_tgp: full_total,
-                is_pending: false,
-            }
-        } else if delta > 25 {
-            // Wide cTGP envelope: default_limit is the down-regulation floor! (e.g. RTX 4060/4070/5060/5070)
-            // True Base TGP = Max Limit - Physical DB Capacity (e.g. 115W - 25W = 90W Base, or 140W - 25W = 115W Base)
-            let true_max_db = hardware_db_cap.min(delta);
-            let true_base_tgp = (max_w as u32).saturating_sub(true_max_db);
-            let floor_w = def_w as u32;
-            GpuTuningCapabilities {
-                gpu_generation: gen,
-                gpu_name,
-                supports_gpu_tuning: true,
-                supports_db: true,
-                supports_ctgp: true,
-                is_full_power: false,
-                ctgp_floor_watts: floor_w,
-                base_tgp_max_watts: true_base_tgp,
-                max_db_watts: true_max_db,
-                max_total_tgp: max_w as u32,
-                is_pending: false,
-            }
-        } else {
-            // Special / fallback boundary where delta == 0
-            let true_max_db = hardware_db_cap;
-            let true_base_tgp = (max_w as u32).saturating_sub(true_max_db);
-            GpuTuningCapabilities {
-                gpu_generation: gen,
-                gpu_name,
-                supports_gpu_tuning: true,
-                supports_db: true,
-                supports_ctgp: false,
-                is_full_power: true,
-                ctgp_floor_watts: true_base_tgp,
-                base_tgp_max_watts: true_base_tgp,
-                max_db_watts: true_max_db,
-                max_total_tgp: max_w as u32,
-                is_pending: false,
-            }
-        }
-    } else {
-        // Fallback when VBIOS power limits query returned (0, 0) (e.g. GPU in D3Cold sleep / background query pending)
-        // Under Hardware Truth: We NEVER invent phantom 115W or 25W numbers!
-        // Return genuine pending placeholder state (0W, is_pending: true) with supports_gpu_tuning: true.
-        GpuTuningCapabilities {
-            gpu_generation: gen,
-            gpu_name,
-            supports_gpu_tuning: true,
-            supports_db: true,
-            supports_ctgp: true,
-            is_full_power: false,
-            ctgp_floor_watts: 0,
-            base_tgp_max_watts: 0,
-            max_db_watts: 0,
-            max_total_tgp: 0,
-            is_pending: true,
-        }
+    // Fixed envelope of this machine (RTX 5070 Ti Laptop: 65 W floor + 50 W cTGP + 25 W Dynamic Boost).
+    // Upstream derived it from nvidia-smi, which returns nothing while the dGPU sleeps and left the
+    // actuator stuck with a 50/100/15 W fallback for the whole session.
+    let m = &crate::machine::GPU;
+    GpuTuningCapabilities {
+        gpu_generation: gen,
+        gpu_name,
+        supports_gpu_tuning: true,
+        supports_db: true,
+        supports_ctgp: true,
+        is_full_power: false,
+        ctgp_floor_watts: m.floor_w as u32,
+        base_tgp_max_watts: m.base_max_w as u32,
+        max_db_watts: m.max_db_w as u32,
+        max_total_tgp: (m.base_max_w + m.max_db_w) as u32,
+        is_pending: false,
     }
 }
 
