@@ -4,15 +4,13 @@ import {
   Cpu,
   BatteryCharging,
   Palette,
-  Droplets,
+  Fan,
   Layers,
-  Heart,
-  Puzzle,
   LucideIcon,
 } from 'lucide-react';
 import { HardwareState } from '../types/hardware';
 
-export type BuiltinTabId = 'overview' | 'gpu' | 'tuning' | 'lighting' | 'water' | 'system' | 'plugins' | 'sponsor';
+export type BuiltinTabId = 'overview' | 'fan' | 'gpu' | 'tuning' | 'lighting' | 'system';
 
 export interface ModelCapabilities {
   id?: string;
@@ -90,6 +88,15 @@ export const BUILTIN_MODULE_SLOTS: BuiltinModuleSlot[] = [
     isVisible: () => true,
   },
   {
+    id: 'fan',
+    name: '风扇调度',
+    tabClassName: 'tab-fan',
+    order: 15,
+    icon: Fan,
+    description: '办公 / 均衡 / 狂暴 三个预设模式的风扇曲线与 EC 实时风扇表',
+    isVisible: () => true,
+  },
+  {
     id: 'gpu',
     name: '显卡模式',
     tabClassName: 'tab-gpu',
@@ -100,7 +107,7 @@ export const BUILTIN_MODULE_SLOTS: BuiltinModuleSlot[] = [
   },
   {
     id: 'tuning',
-    name: '电源管理',
+    name: '电源与电池',
     tabClassName: 'tab-tuning',
     order: 30,
     icon: BatteryCharging,
@@ -109,7 +116,7 @@ export const BUILTIN_MODULE_SLOTS: BuiltinModuleSlot[] = [
   },
   {
     id: 'lighting',
-    name: 'RGB 灯效工坊',
+    name: '键盘灯',
     tabClassName: 'tab-lighting',
     order: 40,
     icon: Palette,
@@ -120,60 +127,12 @@ export const BUILTIN_MODULE_SLOTS: BuiltinModuleSlot[] = [
     },
   },
   {
-    id: 'water',
-    name: '水冷魔盒 (BLE)',
-    tabClassName: 'tab-water',
-    order: 50,
-    icon: Droplets,
-    description: '第二代外置水冷低功耗蓝牙控制、水温遥测与智能温控曲线',
-    isVisible: (ctx) => ctx.isWaterCoolerEnabled,
-    renderBadge: (ctx) => {
-      if (ctx.isCoolerConnected) {
-        return <span className="cooler-tab-dot" />;
-      }
-      return (
-        <span
-          style={{
-            fontSize: '9px',
-            opacity: 0.65,
-            padding: '0 4px',
-            borderRadius: 'var(--radius-xs)',
-            background: 'var(--surface-badge)',
-          }}
-        >
-          未连
-        </span>
-      );
-    },
-  },
-  {
     id: 'system',
     name: '系统',
     tabClassName: 'tab-system',
     order: 60,
     icon: Layers,
     description: '硬件开关矩阵、全局 OSD 浮层排版、自启动及系统参数设置',
-    isEssential: true,
-    isVisible: () => true,
-  },
-  {
-    id: 'plugins',
-    name: '插件',
-    tabClassName: 'tab-plugins',
-    order: 65,
-    icon: Puzzle,
-    description: '内置核心功能模块启闭、第三方扩展与自定义插件管理',
-    isEssential: true,
-    isVisible: () => true,
-  },
-  {
-    id: 'sponsor',
-    name: '支持作者',
-    tabClassName: 'tab-sponsor',
-    order: 70,
-    icon: Heart,
-    iconClass: 'sponsor-tab-heart',
-    description: '开源作者打赏通道、鸣谢名单与硬件逆向资产交接记录',
     isEssential: true,
     isVisible: () => true,
   },

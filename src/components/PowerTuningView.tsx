@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Zap, Battery, Plug, ShieldCheck, Globe, Ban, Lock, Clock, Moon, Snowflake, Info } from 'lucide-react';
 import { RevBadge, RevSwitch } from './ui';
-import { ExtensionSlot } from './common/ExtensionSlot';
 
 interface PowerSettingsInfo {
   battery_percent: number;
@@ -213,7 +212,6 @@ export const PowerTuningView: React.FC = () => {
           </div>
 
           {/* Top Right: 预留微插槽位 (锁定充电上限插件) */}
-          <ExtensionSlot name="power.hardware_limit" style={{ width: 'auto' }} />
         </div>
       </div>
 

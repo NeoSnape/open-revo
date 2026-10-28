@@ -5,12 +5,9 @@ import { OverviewView } from './OverviewView';
 import { LightingStudio } from './LightingStudio';
 import { GpuModeView } from './GpuModeView';
 import { PowerTuningView } from './PowerTuningView';
-import { SponsorView } from './SponsorView';
+import { FanScheduleView } from './FanScheduleView';
 import { CustomTuningPanel } from './CustomTuningPanel';
-import { WaterCoolerView, CoolerTelemetry } from './WaterCoolerView';
 import { SystemSettingsView, OsdConfig } from './SystemSettingsView';
-import { PluginsView, CustomPluginItem } from './PluginsView';
-import { PluginTabHost } from './PluginTabHost';
 import { ModuleErrorBoundary } from './ModuleErrorBoundary';
 import { BUILTIN_MODULE_SLOTS, BuiltinTabId, isSlotActive, ModelCapabilities } from '../plugins/plugin_manifest';
 import logoImg from '../assets/logo.png';
@@ -24,7 +21,6 @@ import {
   Zap,
   Square,
   Copy,
-  Layers,
 } from 'lucide-react';
 
 export type TabId = BuiltinTabId | string;
@@ -32,10 +28,6 @@ export type TabId = BuiltinTabId | string;
 interface FullDashboardProps {
   status: HardwareState;
   theme?: 'mono' | 'cyber';
-  activeSkin?: string | null;
-  activeBackground?: string | null;
-  onApplySkin?: (skinId: string | null) => void;
-  onApplyBackground?: (backgroundId: string | null) => void;
   onToggleTheme?: () => void;
   onSetPowerMode: (mode: PowerMode) => void;
   onToggleFanBoost: (targetRpm?: number) => void;
@@ -59,10 +51,6 @@ import { invoke } from '@tauri-apps/api/core';
 export const FullDashboard: React.FC<FullDashboardProps> = ({
   status,
   theme = 'mono',
-  activeSkin,
-  activeBackground,
-  onApplySkin,
-  onApplyBackground,
   onToggleTheme,
   onSetPowerMode,
   onToggleFanBoost,
@@ -139,28 +127,6 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
       .catch((err) => console.warn('Failed to load module toggles:', err));
   }, []);
 
-  const [localWaterCoolerEnabled, setLocalWaterCoolerEnabled] = useState<boolean | null>(null);
-  const isWaterCoolerEnabled = localWaterCoolerEnabled !== null
-    ? localWaterCoolerEnabled
-    : (moduleToggles.water !== undefined
-        ? moduleToggles.water
-        : (status.water_cooler_enabled ?? status.support_flags?.has_water_cooler ?? false));
-
-  useEffect(() => {
-    if (typeof moduleToggles.water === 'boolean') {
-      setLocalWaterCoolerEnabled(moduleToggles.water);
-    } else if (typeof status.water_cooler_enabled === 'boolean') {
-      setLocalWaterCoolerEnabled(status.water_cooler_enabled);
-    }
-  }, [moduleToggles.water, status.water_cooler_enabled]);
-
-  // Safeguard: if water cooler module is disabled, fallback to overview
-  useEffect(() => {
-    if (!isWaterCoolerEnabled && activeTab === 'water') {
-      setActiveTab('overview');
-    }
-  }, [isWaterCoolerEnabled, activeTab]);
-
   // Model Capabilities (Declarative Hardware Driver Contract)
   const realCapabilitiesRef = useRef<ModelCapabilities | undefined>(undefined);
   const [internalCapabilities, setInternalCapabilities] = useState<ModelCapabilities | undefined>(undefined);
@@ -231,9 +197,6 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
     setModuleToggles((prev) => ({ ...prev, [id]: enabled }));
     try {
       await invoke('set_module_enabled', { id, enabled });
-      if (id === 'water') {
-        setLocalWaterCoolerEnabled(enabled);
-      }
     } catch (e) {
       console.error('Failed to update module toggle:', e);
       setModuleToggles((prev) => ({ ...prev, [id]: !enabled }));
@@ -246,47 +209,6 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
       setActiveTab('overview');
     }
   }, [moduleToggles, activeTab]);
-
-  // Third-party Tab Plugins State
-  const [tabPlugins, setTabPlugins] = useState<CustomPluginItem[]>([]);
-
-  const loadTabPlugins = useCallback(async () => {
-    try {
-      const plugins = await invoke<CustomPluginItem[]>('get_custom_plugins');
-      if (plugins) {
-        setTabPlugins(plugins.filter((p) => p.plugin_type === 'tab' && p.enabled && p.is_compatible !== false));
-      }
-      const toggles = await invoke<Record<string, boolean>>('get_module_toggles');
-      if (toggles) {
-        setModuleToggles(toggles);
-      }
-    } catch (e) {
-      console.warn('Failed to load tab plugins or module toggles:', e);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadTabPlugins();
-  }, [loadTabPlugins]);
-
-  // Safe fallback if custom tab got disabled
-  useEffect(() => {
-    const isBuiltin = BUILTIN_MODULE_SLOTS.some((s) => s.id === activeTab);
-    const isCustomActive = tabPlugins.some((p) => p.id === activeTab);
-    if (!isBuiltin && !isCustomActive && activeTab !== 'overview') {
-      setActiveTab('overview');
-    }
-  }, [tabPlugins, activeTab]);
-
-  const [isCoolerConnected, setIsCoolerConnected] = useState(false);
-
-  useEffect(() => {
-    invoke<CoolerTelemetry>('get_water_cooler_status')
-      .then((res) => {
-        if (res) setIsCoolerConnected(res.connected);
-      })
-      .catch(() => {});
-  }, []);
 
   const [osdConfig, setOsdConfig] = useState<OsdConfig>({
     enabled: true,
@@ -367,7 +289,7 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
       el.removeEventListener('scroll', checkNavScroll);
       window.removeEventListener('resize', checkNavScroll);
     };
-  }, [status, isWaterCoolerEnabled, isCoolerConnected, moduleToggles, tabPlugins]);
+  }, [status, moduleToggles]);
 
   useEffect(() => {
     const el = navBarRef.current;
@@ -607,7 +529,7 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
             }
           }}
         >
-          {BUILTIN_MODULE_SLOTS.filter((slot) => isSlotActive(slot, { status, isWaterCoolerEnabled, isCoolerConnected, moduleToggles, capabilities }))
+          {BUILTIN_MODULE_SLOTS.filter((slot) => isSlotActive(slot, { status, isWaterCoolerEnabled: false, isCoolerConnected: false, moduleToggles, capabilities }))
             .sort((a, b) => a.order - b.order)
             .map((slot) => {
               const IconComponent = slot.icon;
@@ -620,24 +542,9 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
                 >
                   <IconComponent size={14} className={slot.iconClass || 'w-3.5 h-3.5'} />
                   <span>{slot.name}</span>
-                  {slot.renderBadge && slot.renderBadge({ status, isWaterCoolerEnabled, isCoolerConnected })}
                 </button>
               );
             })}
-          {tabPlugins.map((plugin) => {
-            const isActive = activeTab === plugin.id;
-            return (
-              <button
-                key={plugin.id}
-                onClick={() => setActiveTab(plugin.id)}
-                className={`nav-tab tab-plugin-custom ${isActive ? 'active' : ''}`}
-                title={plugin.description}
-              >
-                <Layers size={14} className="w-3.5 h-3.5" />
-                <span>{plugin.name}</span>
-              </button>
-            );
-          })}
         </div>
         {canScrollNavRight && <div className="sub-nav-fade sub-nav-fade-right" />}
       </div>
@@ -662,6 +569,12 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
           </ModuleErrorBoundary>
         )}
 
+        {activeTab === 'fan' && (
+          <ModuleErrorBoundary moduleName="风扇调度" onNavigateToOverview={() => setActiveTab('overview')}>
+            <FanScheduleView status={status} />
+          </ModuleErrorBoundary>
+        )}
+
         {activeTab === 'gpu' && (
           <ModuleErrorBoundary moduleName="显卡模式" onNavigateToOverview={() => setActiveTab('overview')}>
             <GpuModeView />
@@ -680,15 +593,6 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
           </ModuleErrorBoundary>
         )}
 
-        {activeTab === 'water' && isWaterCoolerEnabled && (
-          <ModuleErrorBoundary moduleName="水冷魔盒 (BLE)" onNavigateToOverview={() => setActiveTab('overview')}>
-            <WaterCoolerView
-              status={status}
-              onConnectionChange={setIsCoolerConnected}
-            />
-          </ModuleErrorBoundary>
-        )}
-
         {activeTab === 'system' && (
           <ModuleErrorBoundary moduleName="系统设置" onNavigateToOverview={() => setActiveTab('overview')}>
             <SystemSettingsView
@@ -697,7 +601,7 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
               onUpdateOsdConfig={handleUpdateOsdConfig}
               onToggleWinKey={onToggleWinKey}
               onToggleAutostart={onToggleAutostart}
-              onToggleWaterCooler={(enabled) => setLocalWaterCoolerEnabled(enabled)}
+              onToggleWaterCooler={() => {}}
               moduleToggles={moduleToggles}
               onToggleModule={handleToggleModule}
               capabilities={capabilities}
@@ -707,44 +611,6 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
           </ModuleErrorBoundary>
         )}
 
-        {activeTab === 'plugins' && (
-          <ModuleErrorBoundary moduleName="插件管理" onNavigateToOverview={() => setActiveTab('overview')}>
-            <PluginsView
-              status={status}
-              moduleToggles={moduleToggles}
-              onToggleModule={handleToggleModule}
-              waterCoolerEnabled={isWaterCoolerEnabled}
-              onToggleWaterCooler={(enabled) => {
-                setLocalWaterCoolerEnabled(enabled);
-                setModuleToggles((prev) => ({ ...prev, water: enabled }));
-              }}
-              activeSkin={activeSkin}
-              onApplySkin={onApplySkin}
-              activeBackground={activeBackground}
-              onApplyBackground={onApplyBackground}
-              onCustomPluginsUpdated={loadTabPlugins}
-            />
-          </ModuleErrorBoundary>
-        )}
-
-        {activeTab === 'sponsor' && (
-          <ModuleErrorBoundary moduleName="支持作者" onNavigateToOverview={() => setActiveTab('overview')}>
-            <SponsorView />
-          </ModuleErrorBoundary>
-        )}
-
-        {/* 第三方 Tab 插件渲染沙盒 */}
-        {tabPlugins.some((p) => p.id === activeTab) && (
-          <ModuleErrorBoundary
-            moduleName={tabPlugins.find((p) => p.id === activeTab)?.name || '扩展模块'}
-            onNavigateToOverview={() => setActiveTab('overview')}
-          >
-            <PluginTabHost
-              plugin={tabPlugins.find((p) => p.id === activeTab)!}
-              status={status}
-            />
-          </ModuleErrorBoundary>
-        )}
       </div>
 
       {/* Global Custom Tuning Modal Overlay */}

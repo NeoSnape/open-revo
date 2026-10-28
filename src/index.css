@@ -3173,3 +3173,194 @@ body,
 
 
 
+
+/* ==========================================================================
+   风扇调度 (Preset fan schedule view)
+   ========================================================================== */
+.fan-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  user-select: none;
+}
+.fan-view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.fan-view-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.fan-view-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-fan);
+  background: var(--surface-badge);
+  border: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.fan-view-heading {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.fan-view-sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  line-height: 1.45;
+}
+.fan-policy-switch {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.fan-policy-switch .toggle-btn {
+  padding: 7px 12px;
+  font-size: 12px;
+}
+.fan-view-error {
+  font-size: 12px;
+  color: var(--status-error);
+  background: var(--status-error-dim);
+  border: 1px solid var(--status-error);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+}
+.fan-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.fan-mode-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  --mode-color: var(--color-balance);
+}
+.fan-mode-card.mode-office { --mode-color: var(--color-office); }
+.fan-mode-card.mode-balance { --mode-color: var(--color-balance); }
+.fan-mode-card.mode-beast { --mode-color: var(--color-beast); }
+.fan-mode-card.active {
+  border-color: var(--mode-color);
+  box-shadow: 0 0 0 1px var(--mode-color) inset;
+}
+.fan-mode-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.fan-mode-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--mode-color);
+}
+.fan-mode-live {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  color: var(--mode-color);
+  border: 1px solid var(--mode-color);
+}
+.fan-mode-power {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+.fan-chart {
+  width: 100%;
+  height: 132px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-md);
+}
+.fan-chart-grid {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+}
+.fan-chart-label {
+  fill: var(--text-dim);
+  font-size: 8px;
+  font-family: var(--font-mono);
+}
+.fan-chart-cpu,
+.fan-chart-gpu,
+.fan-chart-official {
+  fill: none;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.fan-chart-cpu { stroke: var(--mode-color); stroke-width: 2; }
+.fan-chart-gpu { stroke: var(--mode-color); stroke-width: 1.5; stroke-dasharray: 4 3; opacity: 0.7; }
+.fan-chart-official { stroke: var(--text-dim); stroke-width: 1.2; stroke-dasharray: 2 3; }
+.fan-mode-stats {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+.fan-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 0 4px;
+}
+.fan-legend-item::before {
+  content: '';
+  display: inline-block;
+  width: 18px;
+  margin-right: 6px;
+  vertical-align: middle;
+  border-top: 2px solid var(--text-secondary);
+}
+.fan-legend-item.gpu::before { border-top-style: dashed; }
+.fan-legend-item.official::before { border-top: 2px dotted var(--text-dim); }
+.fan-ec-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fan-ec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.fan-ec-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.fan-ec-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 3px 6px;
+  white-space: nowrap;
+}
+.fan-ec-table td {
+  text-align: center;
+  color: var(--text-secondary);
+  padding: 3px 2px;
+  border-left: 1px solid var(--border-subtle);
+}
+.fan-ec-empty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+[data-theme="mono"] .fan-mode-card { --mode-color: var(--text-primary); }
+[data-theme="mono"] .fan-mode-card:not(.active) { --mode-color: var(--text-secondary); }
+[data-theme="mono"] .fan-view-icon { color: var(--text-primary); }

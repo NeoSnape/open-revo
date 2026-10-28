@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { listen, emit } from '@tauri-apps/api/event';
+import { listen } from '@tauri-apps/api/event';
 import { HardwareState, PowerMode } from './types/hardware';
 import { MiniDrawer } from './components/MiniDrawer';
 import { FullDashboard } from './components/FullDashboard';
@@ -131,8 +131,10 @@ export default function App() {
   const isBldPreview = urlParams?.get('preview') === 'bld';
 
   const [isExpanded, setIsExpanded] = useState(isBldPreview);
-  const [activeTab, setActiveTab] = useState<'overview' | 'gpu' | 'tuning' | 'lighting' | 'water' | 'system' | 'sponsor'>('overview');
-  const [openCustomTuning, setOpenCustomTuning] = useState(false);
+  const [activeTab, setActiveTab] = useState<'overview' | 'gpu' | 'tuning' | 'lighting' | 'water' | 'system' | 'sponsor'>(
+    (import.meta.env.DEV && (urlParams?.get('tab') as any)) || 'overview'
+  );
+  const [openCustomTuning, setOpenCustomTuning] = useState(import.meta.env.DEV && urlParams?.get('custom') === '1');
   const [hardwareState, setHardwareState] = useState<HardwareState>(isBldPreview ? BLD_PREVIEW_STATE : DEFAULT_STATE);
   const [isTauriEnv, setIsTauriEnv] = useState(false);
 
@@ -220,76 +222,12 @@ export default function App() {
     power_mode?: { val: PowerMode; expiry: number };
   }>({});
 
-  const [activeSkin, setActiveSkin] = useState<string | null>(null);
-  const [activeBackground, setActiveBackground] = useState<string | null>(null);
-
-  const applySkin = useCallback(async (skinId: string | null) => {
-    try {
-      await invoke('set_active_skin', { skinId });
-      setActiveSkin(skinId);
-      const existing = (document.getElementById('openrevo-theme-skin') || document.getElementById('openrevo-custom-skin')) as HTMLStyleElement | null;
-      if (existing) {
-        existing.remove();
-      }
-      if (skinId) {
-        const css = await invoke<string>('load_plugin_theme_css', { pluginId: skinId });
-        const newStyle = document.createElement('style');
-        newStyle.id = 'openrevo-theme-skin';
-        newStyle.textContent = css;
-        document.head.appendChild(newStyle);
-      }
-      if (isExpanded && isTauriEnv) {
-        await invoke('resize_window', { expanded: true });
-      }
-      try {
-        await emit('active-skin-changed', { skinId });
-      } catch (_) {}
-      window.dispatchEvent(new Event('resize'));
-    } catch (err) {
-      console.error('Failed to apply skin:', err);
-    }
-  }, [isExpanded, isTauriEnv]);
-
-  const applyBackground = useCallback(async (bgId: string | null) => {
-    try {
-      await invoke('set_active_background', { backgroundId: bgId });
-      setActiveBackground(bgId);
-      const existing = document.getElementById('openrevo-custom-background') as HTMLStyleElement | null;
-      if (existing) {
-        existing.remove();
-      }
-      if (bgId) {
-        const css = await invoke<string>('load_plugin_background_css', { pluginId: bgId });
-        const newStyle = document.createElement('style');
-        newStyle.id = 'openrevo-custom-background';
-        newStyle.textContent = css;
-        document.head.appendChild(newStyle);
-      }
-      try {
-        await emit('active-background-changed', { bgId });
-      } catch (_) {}
-      window.dispatchEvent(new Event('resize'));
-    } catch (err) {
-      console.error('Failed to apply custom background:', err);
-    }
-  }, []);
-
   // Global root synchronization: Penetrate all Portals, Modals and Tooltips
   useEffect(() => {
     const docEl = document.documentElement;
-    if (activeSkin) {
-      docEl.setAttribute('data-skin', activeSkin);
-    } else {
-      docEl.removeAttribute('data-skin');
-    }
-    if (activeBackground) {
-      docEl.setAttribute('data-background', activeBackground);
-    } else {
-      docEl.removeAttribute('data-background');
-    }
     docEl.setAttribute('data-theme', theme);
     docEl.setAttribute('data-window-mode', isExpanded ? 'full' : 'mini');
-  }, [activeSkin, activeBackground, theme, isExpanded]);
+  }, [theme, isExpanded]);
 
   // Poll hardware status
   const fetchStatus = useCallback(async () => {
@@ -336,46 +274,6 @@ export default function App() {
           }));
           if (cfg.wake_window_mode === 'full') {
             setIsExpanded(true);
-          }
-        }
-      } catch (_) {}
-
-      try {
-        const skin = await invoke<string | null>('get_active_skin');
-        if (skin) {
-          setActiveSkin(skin);
-          try {
-            const css = await invoke<string>('load_plugin_theme_css', { pluginId: skin });
-            let styleEl = (document.getElementById('openrevo-theme-skin') || document.getElementById('openrevo-custom-skin')) as HTMLStyleElement | null;
-            if (!styleEl) {
-              styleEl = document.createElement('style');
-              styleEl.id = 'openrevo-theme-skin';
-              document.head.appendChild(styleEl);
-            } else {
-              styleEl.id = 'openrevo-theme-skin';
-            }
-            styleEl.textContent = css;
-          } catch (e) {
-            console.warn('Failed to load active skin theme.css on boot:', e);
-          }
-        }
-      } catch (_) {}
-
-      try {
-        const bg = await invoke<string | null>('get_active_background');
-        if (bg) {
-          setActiveBackground(bg);
-          try {
-            const css = await invoke<string>('load_plugin_background_css', { pluginId: bg });
-            let styleEl = document.getElementById('openrevo-custom-background') as HTMLStyleElement | null;
-            if (!styleEl) {
-              styleEl = document.createElement('style');
-              styleEl.id = 'openrevo-custom-background';
-              document.head.appendChild(styleEl);
-            }
-            styleEl.textContent = css;
-          } catch (e) {
-            console.warn('Failed to load active background CSS on boot:', e);
           }
         }
       } catch (_) {}
@@ -762,8 +660,6 @@ export default function App() {
     <div
       className="openrevo-app-root"
       data-theme={theme}
-      data-skin={activeSkin || undefined}
-      data-background={activeBackground || undefined}
       data-window-mode={isExpanded ? 'full' : 'mini'}
       data-form-factor={capabilities?.form_factor || 'gaming'}
     >
@@ -771,10 +667,6 @@ export default function App() {
         <FullDashboard
           status={hardwareState}
           theme={theme}
-          activeSkin={activeSkin}
-          activeBackground={activeBackground}
-          onApplySkin={applySkin}
-          onApplyBackground={applyBackground}
           onToggleTheme={handleToggleTheme}
           onSetPowerMode={handleSetPowerMode}
           onToggleFanBoost={handleToggleFanBoost}
