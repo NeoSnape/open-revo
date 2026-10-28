@@ -363,7 +363,7 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
               onClick={handleCopyVersion}
               title={`点击复制版本号: v${__APP_VERSION__}`}
             >
-              {copiedVersion ? '已复制' : `PRO v${__APP_VERSION__}`}
+              {copiedVersion ? '已复制' : `X Pro · v${__APP_VERSION__}`}
             </span>
             {status.is_mock && (
               <span
