@@ -80,7 +80,7 @@ import { ModelCapabilities } from '../../plugins/plugin_manifest';
 export interface DrawerLightingCardProps {
   status?: HardwareState;
   capabilities?: ModelCapabilities;
-  onExpandDashboard: (tab?: 'overview' | 'gpu' | 'tuning' | 'lighting' | 'water' | 'system' | 'sponsor') => void;
+  onExpandDashboard: (tab?: 'overview' | 'fan' | 'gpu' | 'tuning' | 'lighting' | 'system') => void;
 }
 
 export const DrawerLightingCard: React.FC<DrawerLightingCardProps> = ({

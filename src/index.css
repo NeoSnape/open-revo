@@ -3379,3 +3379,19 @@ body,
   color: var(--text-dim);
   line-height: 1.45;
 }
+
+.overview-autostart-alert {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--status-warn-dim);
+  border: 1px solid var(--status-warn);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+}
+.overview-autostart-alert strong {
+  color: var(--status-warn);
+  white-space: nowrap;
+}

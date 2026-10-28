@@ -25,8 +25,7 @@ interface MiniDrawerProps {
   onToggleWinKey: () => void;
   onToggleAutostart: () => void;
   onToggleOemService: (takeOver: boolean) => Promise<void>;
-  onExpandDashboard: (tab?: 'overview' | 'gpu' | 'tuning' | 'lighting' | 'water' | 'system' | 'sponsor' | 'custom_tuning') => void;
-  onOpenSponsor: () => void;
+  onExpandDashboard: (tab?: 'overview' | 'fan' | 'gpu' | 'tuning' | 'lighting' | 'system' | 'custom_tuning') => void;
   onMinimize: () => void;
   onClose: () => void;
 }
@@ -44,7 +43,6 @@ export const MiniDrawer: React.FC<MiniDrawerProps> = ({
   onToggleAutostart,
   onToggleOemService,
   onExpandDashboard,
-  onOpenSponsor,
   onMinimize,
   onClose,
 }) => {
@@ -167,7 +165,6 @@ export const MiniDrawer: React.FC<MiniDrawerProps> = ({
             status={status}
             theme={theme}
             onToggleTheme={toggleTheme}
-            onOpenSponsor={onOpenSponsor}
             onMinimize={onMinimize}
             onClose={onClose}
           />

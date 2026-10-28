@@ -12,7 +12,7 @@ interface DrawerFooterProps {
   status: HardwareState;
   onToggleAutostart: () => void;
   onToggleOemService: (takeOver: boolean) => Promise<void>;
-  onExpandDashboard: (tab?: 'overview' | 'gpu' | 'tuning' | 'lighting' | 'water' | 'system' | 'sponsor' | 'custom_tuning') => void;
+  onExpandDashboard: (tab?: 'overview' | 'fan' | 'gpu' | 'tuning' | 'lighting' | 'system' | 'custom_tuning') => void;
   onClose?: () => void;
   showOemModal: boolean;
   setShowOemModal: (show: boolean) => void;

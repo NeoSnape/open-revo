@@ -135,7 +135,7 @@ export const POWER_MODES: ModeInfo[] = [
     accentClass: 'mode-office',
     pl1: 45,
     pl2: 45,
-    tgp: 150,
+    tgp: 65,
   },
   {
     id: 2,
@@ -146,7 +146,7 @@ export const POWER_MODES: ModeInfo[] = [
     accentClass: 'mode-balance',
     pl1: 75,
     pl2: 75,
-    tgp: 150,
+    tgp: 115,
   },
   {
     id: 3,
@@ -155,9 +155,9 @@ export const POWER_MODES: ModeInfo[] = [
     desc: '原厂高能释放，强效动力尽享峰值性能',
     color: '#f43f5e',
     accentClass: 'mode-beast',
-    pl1: 205,
+    pl1: 175,
     pl2: 205,
-    tgp: 175,
+    tgp: 140,
   },
   {
     id: 4,

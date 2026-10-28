@@ -1,13 +1,12 @@
 import React from 'react';
 import { HardwareState } from '../../types/hardware';
-import { Palette, Heart, Minus, X } from 'lucide-react';
+import { Palette, Minus, X } from 'lucide-react';
 import logoImg from '../../assets/logo.png';
 
 interface DrawerHeaderProps {
   status: HardwareState;
   theme: 'mono' | 'cyber';
   onToggleTheme: () => void;
-  onOpenSponsor: () => void;
   onMinimize: () => void;
   onClose: () => void;
 }
@@ -16,7 +15,6 @@ export const DrawerHeader: React.FC<DrawerHeaderProps> = ({
   status,
   theme,
   onToggleTheme,
-  onOpenSponsor,
   onMinimize,
   onClose,
 }) => {
@@ -82,25 +80,6 @@ export const DrawerHeader: React.FC<DrawerHeaderProps> = ({
           <Palette size={12} />
         </button>
 
-        {/* 赞赏与支持 */}
-        <button
-          onClick={onOpenSponsor}
-          title="支持作者 (赞赏与开源支持)"
-          style={{
-            background: 'transparent',
-            border: 'none',
-            color: 'var(--text-muted)',
-            cursor: 'pointer',
-            padding: '3px 5px',
-            borderRadius: '4px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            transition: 'all 0.15s ease',
-          }}
-        >
-          <Heart size={12} style={{ color: '#f43f5e' }} />
-        </button>
 
         {/* 最小化 */}
         <button

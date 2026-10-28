@@ -205,6 +205,13 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           onUpdateOsdConfig={handleUpdateOsdConfig}
         />
       </div>
+
+      {status.takeover_oem && status.autostart === false && (
+        <div className="overview-autostart-alert">
+          <strong>开机自启未开启</strong>
+          <span>官方后台已被接管并改为手动启动，重启后将没有程序管理风扇与功耗。请到「系统」页打开开机自动启动。</span>
+        </div>
+      )}
     </div>
   );
 };

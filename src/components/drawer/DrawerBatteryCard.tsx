@@ -6,7 +6,7 @@ interface DrawerBatteryCardProps {
   status: HardwareState;
   onToggleBatteryLimit: (limit?: number) => void;
   checkOemGuard: (action: () => void) => void;
-  onExpandDashboard?: (tab?: 'overview' | 'gpu' | 'tuning' | 'lighting' | 'water' | 'system' | 'sponsor' | 'custom_tuning') => void;
+  onExpandDashboard?: (tab?: 'overview' | 'fan' | 'gpu' | 'tuning' | 'lighting' | 'system' | 'custom_tuning') => void;
 }
 
 export const DrawerBatteryCard: React.FC<DrawerBatteryCardProps> = ({

@@ -8,7 +8,7 @@ interface DrawerPowerModeCardProps {
   capabilities?: ModelCapabilities;
   onSetPowerMode: (mode: PowerMode) => void;
   checkOemGuard: (action: () => void) => void;
-  onExpandDashboard: (tab?: 'overview' | 'gpu' | 'tuning' | 'lighting' | 'water' | 'system' | 'sponsor' | 'custom_tuning') => void;
+  onExpandDashboard: (tab?: 'overview' | 'fan' | 'gpu' | 'tuning' | 'lighting' | 'system' | 'custom_tuning') => void;
 }
 
 export const DrawerPowerModeCard: React.FC<DrawerPowerModeCardProps> = ({

@@ -6,7 +6,7 @@ import { Cpu, Repeat, Crosshair } from 'lucide-react';
 
 interface DrawerGpuModeCardProps {
   status: HardwareState;
-  onExpandDashboard: (tab?: 'overview' | 'gpu' | 'tuning' | 'lighting' | 'water' | 'system' | 'sponsor' | 'custom_tuning') => void;
+  onExpandDashboard: (tab?: 'overview' | 'fan' | 'gpu' | 'tuning' | 'lighting' | 'system' | 'custom_tuning') => void;
 }
 
 export const DrawerGpuModeCard: React.FC<DrawerGpuModeCardProps> = ({

@@ -134,17 +134,7 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
             <div className="mode-sub">
               {isRestricted
                 ? '需圆口DC'
-                : isActive
-                ? isCustom
-                  ? '● 极客调校'
-                  : '● 当前'
-                : mode.id === 1
-                ? '静音'
-                : mode.id === 2
-                ? '日常'
-                : mode.id === 3
-                ? '狂暴'
-                : '极客'}
+                : `${isActive ? '● ' : ''}${mode.id === 4 ? '自定义调校' : `${mode.pl1}W · GPU ${mode.tgp}W`}`}
             </div>
           </button>
         );

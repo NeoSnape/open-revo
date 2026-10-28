@@ -131,7 +131,7 @@ export default function App() {
   const isBldPreview = urlParams?.get('preview') === 'bld';
 
   const [isExpanded, setIsExpanded] = useState(isBldPreview);
-  const [activeTab, setActiveTab] = useState<'overview' | 'gpu' | 'tuning' | 'lighting' | 'water' | 'system' | 'sponsor'>(
+  const [activeTab, setActiveTab] = useState<'overview' | 'fan' | 'gpu' | 'tuning' | 'lighting' | 'system'>(
     (import.meta.env.DEV && (urlParams?.get('tab') as any)) || 'overview'
   );
   const [openCustomTuning, setOpenCustomTuning] = useState(import.meta.env.DEV && urlParams?.get('custom') === '1');
@@ -586,7 +586,7 @@ export default function App() {
   };
 
   // Window resize & layout mode
-  const handleExpandDashboard = async (targetTab?: 'overview' | 'gpu' | 'tuning' | 'lighting' | 'water' | 'system' | 'sponsor' | 'custom_tuning') => {
+  const handleExpandDashboard = async (targetTab?: 'overview' | 'fan' | 'gpu' | 'tuning' | 'lighting' | 'system' | 'custom_tuning') => {
     if (targetTab === 'custom_tuning') {
       setActiveTab('overview');
       setOpenCustomTuning(true);
@@ -594,19 +594,6 @@ export default function App() {
       setActiveTab(targetTab || 'overview');
       setOpenCustomTuning(false);
     }
-    setIsExpanded(true);
-    if (isTauriEnv) {
-      try {
-        await invoke('resize_window', { expanded: true });
-      } catch (e) {
-        console.error(e);
-      }
-    }
-  };
-
-  const handleOpenSponsor = async () => {
-    setActiveTab('sponsor');
-    setOpenCustomTuning(false);
     setIsExpanded(true);
     if (isTauriEnv) {
       try {
@@ -698,7 +685,6 @@ export default function App() {
           onToggleAutostart={handleToggleAutostart}
           onToggleOemService={handleToggleOemService}
           onExpandDashboard={handleExpandDashboard}
-          onOpenSponsor={handleOpenSponsor}
           onMinimize={handleMinimize}
           onClose={handleClose}
         />
