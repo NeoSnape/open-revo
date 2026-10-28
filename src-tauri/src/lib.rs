@@ -6,7 +6,6 @@ pub mod commands;
 pub mod driver;
 pub mod hal;
 pub mod system;
-pub mod updater;
 
 
 use crate::driver::ec_bridge::{EcBridge, SharedEcBridge};
@@ -228,29 +227,6 @@ pub fn run() {
             commands::hardware_cmd::clear_user_data_dir,
             commands::hardware_cmd::get_user_data_dir_info,
             commands::hardware_cmd::migrate_user_data_dir,
-            updater::check_for_updates_cmd,
-            updater::download_and_install_update_cmd,
-            commands::hardware_cmd::open_plugins_dir,
-            commands::hardware_cmd::get_custom_plugins,
-            commands::hardware_cmd::set_custom_plugin_enabled,
-            commands::hardware_cmd::start_plugin_service,
-            commands::hardware_cmd::stop_plugin_service,
-            commands::hardware_cmd::get_plugin_service_status,
-            commands::hardware_cmd::get_plugin_host_capabilities,
-            commands::hardware_cmd::open_external_url,
-            commands::hardware_cmd::write_clipboard,
-            commands::hardware_cmd::reload_plugins,
-            commands::hardware_cmd::get_plugin_manifest,
-            commands::hardware_cmd::set_plugin_enabled_unified,
-            commands::hardware_cmd::uninstall_plugin,
-            commands::hardware_cmd::install_plugin_from_url,
-            commands::system_cmd::load_plugin_theme_css,
-            commands::system_cmd::set_active_skin,
-            commands::system_cmd::get_active_skin,
-            commands::system_cmd::load_plugin_background_css,
-            commands::system_cmd::set_active_background,
-            commands::system_cmd::get_active_background,
-            commands::system_cmd::load_plugin_html,
             commands::hardware_cmd::get_windows_power_schemes,
             commands::hardware_cmd::set_active_windows_power_scheme,
             commands::hardware_cmd::restore_official_power_plan,
@@ -279,22 +255,10 @@ pub fn run() {
             commands::hardware_cmd::emergency_hard_unlock_gpu,
             crate::system::telemetry::report_window_visibility,
             crate::system::telemetry::get_telemetry_heartbeat_status,
-            crate::system::widget_manager::open_custom_widget,
-            crate::system::widget_manager::close_custom_widget,
-            crate::system::widget_manager::get_running_widgets,
-            crate::system::widget_manager::widget_ready,
             commands::shortcut_cmd::get_registered_shortcuts,
             commands::shortcut_cmd::register_custom_shortcut,
             commands::shortcut_cmd::unregister_custom_shortcut,
             commands::shortcut_cmd::trigger_shortcut_action,
-            commands::raw_ec_cmd::get_raw_ec_capabilities,
-            commands::raw_ec_cmd::raw_ec_read,
-            commands::raw_ec_cmd::raw_ec_write,
-            commands::raw_ec_cmd::raw_mailbox_invoke,
-            commands::watcher_cmd::get_registered_watchers,
-            commands::watcher_cmd::register_custom_watcher,
-            commands::watcher_cmd::unregister_custom_watcher,
-            commands::watcher_cmd::trigger_watcher_manual,
         ])
         .setup(move |app| {
             crate::system::boot_trace::boot_log("SETUP", "Tauri setup closure entered");
@@ -366,20 +330,9 @@ pub fn run() {
                 );
             });
 
-            // Step 6.12: Enqueue enabled widget windows into WebviewOrchestrator for safe serial startup
-            crate::system::boot_trace::boot_scope("Step 6.12: Widgets Orchestrator Enqueue", || {
-                crate::system::widget_manager::restore_active_widgets_on_boot(&app.handle());
-            });
-
             // Step 6.13: Verify & auto-heal autostart scheduled task to align with current executable
             crate::system::boot_trace::boot_scope("Step 6.13: Autostart Alignment", || {
                 crate::system::autostart::sync_autostart_target_path();
-            });
-
-            // Step 6.14: Initialize Universal Watcher Hub and auto-load plugin watchers
-            crate::system::boot_trace::boot_scope("Step 6.14: Watcher Hub Initialization", || {
-                crate::system::watcher_hub::init_watcher_hub(app.handle().clone());
-                let _ = crate::commands::system_cmd::get_custom_plugins();
             });
 
             crate::system::boot_trace::boot_log("TRAY", "System tray mounted and listeners active");
@@ -395,7 +348,6 @@ pub fn run() {
                 println!("[OpenRevo] Process exiting. Executing clean webview shutdown and hardware safety shutdown...");
                 crate::system::webview_orchestrator::WebviewOrchestrator::global().safe_shutdown_all_subviews();
                 crate::system::tray::safe_hardware_shutdown_on_exit();
-                crate::system::plugin_service::shutdown_all_plugin_services();
             }
         });
 }

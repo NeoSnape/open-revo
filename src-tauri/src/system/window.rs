@@ -355,12 +355,6 @@ pub fn handle_window_event(window: &Window, event: &WindowEvent) {
     match event {
         WindowEvent::Moved(pos) => {
             *LAST_MOVE_TIME.lock() = Some(std::time::Instant::now());
-            let label = window.label();
-            if label.starts_with("widget_") {
-                let plugin_id = label.trim_start_matches("widget_").replace('_', "-");
-                crate::system::widget_manager::queue_widget_position(plugin_id, pos.x, pos.y);
-                return;
-            }
             let scale = window.scale_factor().unwrap_or(1.0);
             if let Ok(sz) = window.inner_size() {
                 if (sz.width as f64 / scale) > 600.0 {

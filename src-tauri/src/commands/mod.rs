@@ -10,10 +10,7 @@ pub mod switches_cmd;
 pub mod system_cmd;
 pub mod tuning_cmd;
 pub mod window_cmd;
-pub mod market_cmd;
 pub mod shortcut_cmd;
-pub mod raw_ec_cmd;
-pub mod watcher_cmd;
 
 pub use display_cmd::*;
 pub use lighting_cmd::*;
@@ -22,7 +19,4 @@ pub use switches_cmd::*;
 pub use system_cmd::*;
 pub use tuning_cmd::*;
 pub use window_cmd::*;
-pub use market_cmd::*;
 pub use shortcut_cmd::*;
-pub use raw_ec_cmd::*;
-pub use watcher_cmd::*;

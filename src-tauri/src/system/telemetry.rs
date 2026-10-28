@@ -88,7 +88,6 @@ pub fn is_telemetry_active() -> bool {
     }
     MAIN_WINDOW_VISIBLE.load(Ordering::Relaxed)
         || ACTIVE_SUBSCRIBERS.load(Ordering::Relaxed) > 0
-        || crate::system::watcher_hub::has_active_telemetry_watchers()
 }
 
 /// Determine whether NVIDIA dGPU queries (NVAPI) should be executed
@@ -96,9 +95,6 @@ pub fn is_telemetry_active() -> bool {
 /// NEVER query GPU to prevent waking up NVIDIA dGPU from D3Cold ultra-low power state.
 pub fn should_query_gpu() -> bool {
     if MAIN_WINDOW_VISIBLE.load(Ordering::Relaxed) {
-        return true;
-    }
-    if crate::system::watcher_hub::should_query_gpu_for_watchers() {
         return true;
     }
     let map = get_subscribed_sensors().lock();
@@ -145,7 +141,6 @@ pub fn start_telemetry_loop(
                     let state = collect_hardware_state(&ec_bridge, &gpu_bridge, query_gpu);
                     if !SCREEN_SUSPENDED.load(Ordering::SeqCst) && !REBOOT_FREEZE.load(Ordering::SeqCst) {
                         let _ = app.emit("hardware-state-updated", &state);
-                        crate::system::watcher_hub::evaluate_telemetry_watchers(&state);
                     }
                     std::thread::sleep(Duration::from_millis(1500));
                 } else {

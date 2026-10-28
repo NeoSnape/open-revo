@@ -14,8 +14,6 @@ use tauri::{AppHandle, Manager};
 pub enum WindowTaskType {
     /// OSD HUD overlay window
     Osd,
-    /// Desktop organic widget sandbox window
-    Widget { plugin_id: String },
 }
 
 /// Central orchestrator state and queue keeper
@@ -87,11 +85,6 @@ impl WebviewOrchestrator {
     /// Enqueue OSD overlay window creation
     pub fn enqueue_osd(&self) {
         self.enqueue(WindowTaskType::Osd);
-    }
-
-    /// Enqueue a desktop widget creation
-    pub fn enqueue_widget(&self, plugin_id: String) {
-        self.enqueue(WindowTaskType::Widget { plugin_id });
     }
 
     /// Ensure the background queue processor worker is alive
@@ -167,51 +160,6 @@ impl WebviewOrchestrator {
                         }
                     }
                 }
-                WindowTaskType::Widget { plugin_id } => {
-                    let app_clone = app.clone();
-                    let pid = plugin_id.clone();
-                    let build_future = tokio::time::timeout(
-                        Duration::from_millis(2500),
-                        async move {
-                            crate::system::widget_manager::spawn_widget_window_internal(&app_clone, &pid).await
-                        },
-                    );
-
-                    match build_future.await {
-                        Ok(Ok(label)) => {
-                            crate::log_info!(
-                                "ORCHESTRATOR",
-                                "Widget '{}' ({}) built and mounted smoothly.",
-                                plugin_id,
-                                label
-                            );
-                        }
-                        Ok(Err(e)) => {
-                            crate::log_error!(
-                                "ORCHESTRATOR",
-                                "Widget '{}' build returned error: {}",
-                                plugin_id,
-                                e
-                            );
-                        }
-                        Err(_) => {
-                            crate::log_warn!(
-                                "ORCHESTRATOR",
-                                "Widget '{}' build timed out (2500ms)! Circuit breaker triggered: destroying and quarantining.",
-                                plugin_id
-                            );
-                            let label = crate::system::widget_manager::format_widget_label(&plugin_id);
-                            if let Some(win) = app.get_webview_window(&label) {
-                                let _ = win.destroy();
-                            }
-                            // Auto-quarantine: disable plugin in config to prevent subsequent boot freezes
-                            let mut cfg = crate::system::config::load_config();
-                            cfg.custom_plugin_toggles.insert(plugin_id.clone(), false);
-                            crate::system::config::save_config(&cfg);
-                            crate::system::telemetry::unregister_consumer(&plugin_id);
-                        }
-                    }
-                }
             }
 
             // Gatekeeper 3: Staggered cooldown period (150ms) to smooth out Chromium GPU composition spikes
@@ -232,16 +180,6 @@ impl WebviewOrchestrator {
                 crate::log_info!("ORCHESTRATOR", "OSD window destroyed cleanly.");
             }
 
-            // 2. All running widgets
-            if let Ok(widgets) = crate::system::widget_manager::get_running_widgets() {
-                for pid in widgets {
-                    let label = crate::system::widget_manager::format_widget_label(&pid);
-                    if let Some(win) = app.get_webview_window(&label) {
-                        let _ = win.destroy();
-                        crate::log_info!("ORCHESTRATOR", "Widget window '{}' destroyed cleanly.", label);
-                    }
-                }
-            }
         }
     }
 }

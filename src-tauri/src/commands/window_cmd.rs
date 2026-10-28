@@ -38,25 +38,7 @@ pub fn resize_window(app: AppHandle, expanded: bool) -> Result<(), String> {
 
             // 1. Try to use saved position from memory or persistent config
             let cfg = crate::system::config::load_config();
-            let (target_w, target_h, is_resizable) = if let Some(ref skin_id) = cfg.active_skin {
-                let manifest_path = crate::system::config::get_config_dir().join("plugins").join(skin_id).join("manifest.json");
-                if let Ok(content) = std::fs::read_to_string(&manifest_path) {
-                    if let Ok(manifest) = serde_json::from_str::<crate::commands::system_cmd::RawPluginManifest>(&content) {
-                        if let Some(win) = manifest.window {
-                            (win.width, win.height, win.resizable)
-                        } else {
-                            (960.0, 740.0, false)
-                        }
-                    } else {
-                        (960.0, 740.0, false)
-                    }
-                } else {
-                    (960.0, 740.0, false)
-                }
-            } else {
-                (960.0, 740.0, false)
-            };
-
+            let (target_w, target_h, is_resizable) = (960.0_f64, 740.0_f64, false);
             let saved_pos = (*LAST_FULL_POS.lock()).or_else(|| {
                 match (cfg.full_window_x, cfg.full_window_y) {
                     (Some(x), Some(y)) => Some((x, y)),

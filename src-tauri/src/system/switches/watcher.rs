@@ -311,7 +311,6 @@ pub fn start_hardware_state_watcher(
                         }
                         use tauri::Emitter;
                         let _ = app.emit("dc-status-changed", false);
-                        crate::system::watcher_hub::notify_power_event("ac_disconnected");
                     } else if !last_dc && is_dc {
                         // DC round adapter plugged back in (Transition: On Battery/Type-C -> DC Online)
                         let mut cfg = crate::system::config::load_config();
@@ -343,7 +342,6 @@ pub fn start_hardware_state_watcher(
                         let _ = app.emit_to("main", "physical-mode-switched", target_mode);
                         let _ = app.emit_to("osd", "physical-mode-switched", target_mode);
                         let _ = app.emit("dc-status-changed", true);
-                        crate::system::watcher_hub::notify_power_event("ac_connected");
                     }
                 } else if is_dc {
                     // Initial first loop (last_dc_line is None): DC is online at boot
