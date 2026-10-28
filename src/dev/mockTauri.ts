@@ -316,6 +316,7 @@ function hardwareState(): HardwareState {
     is_mock: true,
     oem_running: state.oemRunning,
     oem_installed: true,
+    takeover_oem: true,
     autostart: state.autostart,
     is_intel_13_14_gen: true,
     water_cooler_enabled: false,

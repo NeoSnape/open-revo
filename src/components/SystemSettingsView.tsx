@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import {
   FolderOpen,
   Trash2,
@@ -15,8 +14,6 @@ import {
   Cable,
   Sliders,
   Droplets,
-  Download,
-  RefreshCw,
   HardDrive,
 } from 'lucide-react';
 import { HardwareState } from '../types/hardware';
@@ -257,81 +254,18 @@ export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
     }
   };
 
-  // Auto-Updater State & Handlers
-  interface UpdateCheckResult {
-    has_update: boolean;
-    current_version: string;
-    current_commit: string;
-    latest_version: string;
-    latest_commit: string;
-    display_version: string;
-    notes: string;
-    chosen_source: string;
-    asset_type: string;
-    filename: string;
-    download_url: string;
-    size: number;
-    sha256: string;
-  }
-
-  interface DownloadProgressPayload {
-    downloaded: number;
-    total: number;
-    percentage: number;
-    speed_bytes_per_sec: number;
-  }
-
-  const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
-  const [showUpdateModal, setShowUpdateModal] = useState(false);
-  const [downloadingUpdate, setDownloadingUpdate] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState<DownloadProgressPayload | null>(null);
-
+  // Global shortcuts master switch (Ctrl+Shift+F / M / R), off by default
+  const [shortcutsEnabled, setShortcutsEnabled] = useState(false);
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen<DownloadProgressPayload>('updater-progress', (event) => {
-      setDownloadProgress(event.payload);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      if (unlisten) unlisten();
-    };
+    invoke<boolean>('get_shortcuts_enabled').then(setShortcutsEnabled).catch(() => {});
   }, []);
-
-  const handleCheckForUpdates = async (silent: boolean = false) => {
-    setCheckingUpdate(true);
+  const handleToggleShortcuts = async (enabled: boolean) => {
+    setShortcutsEnabled(enabled);
     try {
-      const res = await invoke<UpdateCheckResult>('check_for_updates_cmd', { preferredSource: null });
-      setUpdateResult(res);
-      if (res.has_update) {
-        setShowUpdateModal(true);
-      } else if (!silent) {
-        alert(`当前已是最新版本 (${res.display_version || res.current_version})！\n暂无可用更新。`);
-      }
-    } catch (err: any) {
-      if (!silent) {
-        alert('检查更新失败: ' + err);
-      }
-    } finally {
-      setCheckingUpdate(false);
-    }
-  };
-
-  const handleDownloadAndInstall = async () => {
-    if (!updateResult) return;
-    setDownloadingUpdate(true);
-    setDownloadProgress({ downloaded: 0, total: updateResult.size, percentage: 0, speed_bytes_per_sec: 0 });
-    try {
-      await invoke('download_and_install_update_cmd', {
-        downloadUrl: updateResult.download_url,
-        expectedSha256: updateResult.sha256,
-        filename: updateResult.filename,
-        isInstaller: updateResult.asset_type === 'installer',
-      });
-    } catch (err: any) {
-      alert('下载或升级安装失败: ' + err);
-      setDownloadingUpdate(false);
+      setShortcutsEnabled(await invoke<boolean>('set_shortcuts_enabled', { enabled }));
+    } catch (e) {
+      console.error('Failed to toggle shortcuts:', e);
+      setShortcutsEnabled(!enabled);
     }
   };
 
@@ -473,8 +407,15 @@ export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
           {/* 开机自动启动 */}
           <div className="quick-row">
             <div>
-              <div className="sys-row-label">开机自动启动 (最小化至托盘)</div>
-              <div className="sys-row-desc">开机自动加载驱动与上次配置</div>
+              <div className="sys-row-label">
+                <span>开机自动启动 (最小化至托盘)</span>
+                {status.takeover_oem && !status.autostart && <RevBadge variant="error">已接管官方服务，必须开启</RevBadge>}
+              </div>
+              <div className="sys-row-desc">
+                {status.takeover_oem
+                  ? '官方后台已改为手动启动；不开自启的话，重启后没有程序管理风扇与功耗'
+                  : '开机自动加载驱动与上次配置'}
+              </div>
             </div>
             <RevSwitch
               checked={!!status.autostart}
@@ -627,30 +568,18 @@ export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
             </div>
           </div>
 
-          {/* 软件版本与自动更新 */}
+          {/* 全局快捷键 */}
           <div className="quick-row">
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <div className="sys-row-label">软件版本与分发更新</div>
-                <RevBadge variant="info">
-                  {updateResult?.display_version || 'v0.9.3'}
-                </RevBadge>
+              <div className="sys-row-label">
+                <span>全局快捷键</span>
+                <RevBadge variant={shortcutsEnabled ? 'warning' : 'default'}>{shortcutsEnabled ? '已启用' : '已关闭'}</RevBadge>
               </div>
               <div className="sys-row-desc">
-                支持 GitHub 官方与国内 Gitee 镜像智能双源竞速拉取；适配安装版与绿色便携版
+                Ctrl+Shift+F 一键强冷 · Ctrl+Shift+M 切换性能模式 · Ctrl+Shift+R 切换刷新率。启用后这些组合键会被拦截，不再传给 VS Code / 浏览器
               </div>
             </div>
-            <div className="sys-row-controls">
-              <button
-                onClick={() => handleCheckForUpdates(false)}
-                disabled={checkingUpdate}
-                className={`toggle-btn ${checkingUpdate ? 'active-indigo' : ''}`}
-                title="立即并发向 GitHub 与 Gitee 查询是否有新版本发布"
-              >
-                <RefreshCw size={12} className={checkingUpdate ? 'spin-icon' : ''} />
-                <span>{checkingUpdate ? '正在检测...' : '检查更新'}</span>
-              </button>
-            </div>
+            <RevSwitch checked={shortcutsEnabled} onChange={handleToggleShortcuts} />
           </div>
 
           {/* Windows 基础电源方案 */}
@@ -1089,82 +1018,6 @@ export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
         </div>
       )}
 
-      {/* 自动更新检测与安装弹窗 */}
-      {showUpdateModal && updateResult && (
-        <div
-          className="sys-modal-backdrop"
-          onClick={() => !downloadingUpdate && setShowUpdateModal(false)}
-        >
-          <div
-            className="sys-modal-card"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="sys-modal-header">
-              <div className="sys-modal-icon-badge info">
-                <Download size={20} />
-              </div>
-              <div>
-                <div className="sys-modal-title">
-                  发现新版本 {updateResult.display_version || updateResult.latest_version}
-                </div>
-                <div className="sys-modal-subtitle">
-                  测速首选: {updateResult.chosen_source === 'gitee' ? 'Gitee 国内镜像加速' : updateResult.chosen_source === 'local_mock' ? '本地测试模拟' : 'GitHub 官方源'} · 分发形态: {updateResult.asset_type === 'installer' ? '安装包覆盖升级' : '绿色版脱壳热更'}
-                </div>
-              </div>
-            </div>
-
-            <div className="sys-modal-body">
-              <div style={{ marginBottom: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                更新日志与变更说明：
-              </div>
-              <div className="updater-changelog-box">
-                {updateResult.notes || '暂无详细更新日志。'}
-              </div>
-
-              <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--text-dim)', display: 'flex', justifyContent: 'space-between' }}>
-                <span>分发文件: {updateResult.filename}</span>
-                <span>大小: {(updateResult.size / (1024 * 1024)).toFixed(2)} MB</span>
-              </div>
-
-              {downloadingUpdate && downloadProgress && (
-                <div className="updater-progress-container">
-                  <div className="updater-progress-bar-bg">
-                    <div
-                      className="updater-progress-bar-fill"
-                      style={{ width: `${Math.min(100, Math.max(0, downloadProgress.percentage))}%` }}
-                    />
-                  </div>
-                  <div className="updater-progress-stats">
-                    <span>
-                      {(downloadProgress.downloaded / (1024 * 1024)).toFixed(2)} MB / {(downloadProgress.total / (1024 * 1024)).toFixed(2)} MB
-                    </span>
-                    <span>
-                      {(downloadProgress.speed_bytes_per_sec / (1024 * 1024)).toFixed(2)} MB/s ({downloadProgress.percentage.toFixed(1)}%)
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="sys-modal-actions">
-              <button
-                disabled={downloadingUpdate}
-                onClick={() => setShowUpdateModal(false)}
-                className="toggle-btn"
-              >
-                稍后再说
-              </button>
-              <button
-                disabled={downloadingUpdate}
-                onClick={handleDownloadAndInstall}
-                className="toggle-btn active-indigo"
-              >
-                {downloadingUpdate ? '正在下载升级...' : '立即升级'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

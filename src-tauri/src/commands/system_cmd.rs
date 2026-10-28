@@ -40,6 +40,8 @@ pub struct HardwareState {
     pub is_mock: bool,
     pub oem_running: bool,
     pub oem_installed: bool,
+    /// OpenRevo has taken over (paused) the OEM services.
+    pub takeover_oem: bool,
     pub autostart: bool,
     pub is_intel_13_14_gen: bool,
     pub water_cooler_enabled: bool,
@@ -142,7 +144,7 @@ pub fn collect_hardware_state(
     let oem_running = process::is_oem_service_running();
     let oem_installed = process::is_oem_installed();
     let is_intel_13_14_gen = cpu.is_intel_13_14_gen();
-    let autostart_enabled = autostart::is_autostart_enabled();
+    let autostart_enabled = autostart::is_autostart_enabled_cached();
 
     let cfg = crate::system::config::load_config();
 
@@ -174,6 +176,7 @@ pub fn collect_hardware_state(
         is_mock,
         oem_running,
         oem_installed,
+        takeover_oem: cfg.takeover_oem,
         autostart: autostart_enabled,
         is_intel_13_14_gen,
         water_cooler_enabled: crate::system::config::is_water_cooler_enabled(),

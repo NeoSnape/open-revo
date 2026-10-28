@@ -11,6 +11,26 @@ const TASK_NAME: &str = "OpenRevo";
 const LEGACY_SUB_KEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Run");
 const LEGACY_VALUE_NAME: PCWSTR = w!("OpenRevo");
 
+static AUTOSTART_CACHE: parking_lot::Mutex<Option<(bool, std::time::Instant)>> = parking_lot::Mutex::new(None);
+
+/// Cached variant for the telemetry path: `schtasks /query` spawns a process, and the
+/// telemetry loop used to run it every 1.5 s while the window was open.
+pub fn is_autostart_enabled_cached() -> bool {
+    let mut guard = AUTOSTART_CACHE.lock();
+    if let Some((v, t)) = *guard {
+        if t.elapsed() < std::time::Duration::from_secs(60) {
+            return v;
+        }
+    }
+    let v = is_autostart_enabled();
+    *guard = Some((v, std::time::Instant::now()));
+    v
+}
+
+fn invalidate_autostart_cache() {
+    *AUTOSTART_CACHE.lock() = None;
+}
+
 /// Checks whether the OpenRevo scheduled task exists in Windows Task Scheduler.
 pub fn is_autostart_enabled() -> bool {
     let output = Command::new("schtasks")
@@ -127,6 +147,7 @@ pub fn sync_autostart_target_path() {
 }
 
 pub fn set_autostart_enabled(enabled: bool) -> Result<bool, String> {
+    invalidate_autostart_cache();
     clean_legacy_registry();
 
     if enabled {

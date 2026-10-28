@@ -33,6 +33,7 @@ export interface HardwareState {
   is_mock?: boolean;         // true if running in safe mock mode
   oem_running?: boolean;     // true if GCUService is running
   oem_installed?: boolean;   // true if official control center is installed
+  takeover_oem?: boolean;    // true if OpenRevo paused the OEM services
   autostart?: boolean;       // true if autostart enabled
   is_intel_13_14_gen?: boolean; // true if running on 13th or 14th Gen Intel CPU
   water_cooler_enabled?: boolean; // Water cooler module enabled status (user preference or detected)
