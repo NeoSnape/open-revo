@@ -11,6 +11,5 @@ pub mod custom_fx_engine;
 pub mod nvapi;
 pub mod hid_ffi;
 pub mod wmi_mulong;
-pub mod wmi_ip3;
 pub mod bld_driver_mgr;
 

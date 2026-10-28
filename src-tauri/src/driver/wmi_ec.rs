@@ -435,11 +435,6 @@ pub fn is_legacy_dual_mode_ec() -> bool {
             }
 
             // Signal 1: Declarative Driver Manifest Contract
-            if let Some(manifest) = crate::hal::declarative::load_matched_manifest() {
-                if manifest.id.contains("legacy") || manifest.id.contains("dual_mode") {
-                    return (true, "Signal 1: Declared as Legacy Dual-Mode via Manifest Contract");
-                }
-            }
 
             (false, "Default: Modern architecture")
         })();
@@ -581,28 +576,6 @@ impl Default for HardwareSupportFlags {
 pub fn get_hardware_support_flags() -> HardwareSupportFlags {
     static CACHED_FLAGS: std::sync::OnceLock<HardwareSupportFlags> = std::sync::OnceLock::new();
     *CACHED_FLAGS.get_or_init(|| {
-        if let Some(manifest) = crate::hal::declarative::load_matched_manifest() {
-            let is_rgb = manifest
-                .capabilities
-                .rgb_keyboard
-                .as_ref()
-                .map(|k| k.keyboard_type != "none" && k.keyboard_type != "monochrome_stepped")
-                .unwrap_or(false);
-            let has_boost = manifest.capabilities.fan_control_mode.as_deref() != Some("none")
-                && (manifest.capabilities.fan_boost_mode.as_deref() == Some("hardware_toggle")
-                    || manifest.capabilities.fan_boost_mode.as_deref() == Some("direct_rpm_clamp")
-                    || manifest.actions.contains_key("set_fan_boost_on")
-                    || manifest.channels.values().any(|c| matches!(c, crate::hal::declarative::model_manifest::ChannelDef::AcpiIoctl { .. })));
-            return HardwareSupportFlags {
-                has_fan_boost: has_boost,
-                has_lightbar: false,
-                has_win_lock: true,
-                has_fn_lock: manifest.capabilities.fn_lock,
-                has_battery_limit: manifest.capabilities.battery_charge_limit,
-                is_rgb_keyboard: is_rgb,
-                has_water_cooler: manifest.capabilities.water_cooling,
-            };
-        }
 
         if crate::hal::platform_probe::is_ultrabook() {
             return HardwareSupportFlags {

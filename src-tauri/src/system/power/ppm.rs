@@ -215,11 +215,11 @@ pub fn apply_all_sleep_guard(enable: bool) {
 }
 
 #[cfg(target_os = "windows")]
-const BLD_AMD_PPM_PROCESSOR_WIN11: &[u8] = include_bytes!("../../../resources/driver/bld/ppm/AMD.Power.Processor.2.ppkg");
+const BLD_AMD_PPM_PROCESSOR_WIN11: &[u8] = &[]; // AMD/BLD packages removed: Intel-only build
 #[cfg(target_os = "windows")]
-const BLD_AMD_PPM_PROCESSOR_WIN10: &[u8] = include_bytes!("../../../resources/driver/bld/ppm/AMD.Power.Processor.ppkg");
+const BLD_AMD_PPM_PROCESSOR_WIN10: &[u8] = &[]; // AMD/BLD packages removed: Intel-only build
 #[cfg(target_os = "windows")]
-const BLD_AMD_PPM_NVME: &[u8] = include_bytes!("../../../resources/driver/bld/ppm/AMD.Power.NVMe.ppkg");
+const BLD_AMD_PPM_NVME: &[u8] = &[]; // AMD/BLD packages removed: Intel-only build
 
 #[cfg(target_os = "windows")]
 fn is_windows_11() -> bool {
@@ -358,7 +358,7 @@ pub fn restore_official_power_plan() -> Result<String, String> {
         let is_bld_manifest = crate::hal::declarative::load_matched_manifest()
             .map(|m| m.id.to_lowercase().contains("bld"))
             .unwrap_or(false);
-        let is_bld_or_amd = is_amd_cpu || is_bld_manifest;
+        let is_bld_or_amd = (is_amd_cpu || is_bld_manifest) && !BLD_AMD_PPM_NVME.is_empty();
 
         let return_msg = if is_bld_or_amd {
             crate::log_info!("POWER_PPM", "Target platform detected as BLD/AMD. Deploying official AMD PPM packages...");

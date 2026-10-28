@@ -417,23 +417,6 @@ pub fn read_gpu_mode() -> GpuModeHardwareStatus {
     let platform_str = if is_amd { "amd".to_string() } else { "intel".to_string() };
 
     // 0. Declarative Driver Contract First (Level 0 Architecture - e.g. Baolongda Jiaolong 16 Pro)
-    if let Some(manifest) = crate::hal::declarative::load_matched_manifest() {
-        if manifest.actions.contains_key("get_gpu_mux") || manifest.actions.contains_key("set_gpu_mux_hybrid") {
-            let drv = crate::hal::declarative::DeclarativeHardwareDriver::new(manifest.clone());
-            if let Ok(mode_str) = crate::hal::traits::HardwareDriver::get_gpu_mux(&drv) {
-                let raw_val = if mode_str == "dgpu" { 1 } else { 0 };
-                let platform_str = manifest.capabilities.cpu_vendor.clone().unwrap_or(platform_str);
-                return GpuModeHardwareStatus {
-                    current_mode: mode_str,
-                    raw_value: raw_val,
-                    platform: platform_str,
-                    cpu_name,
-                    hardware_read: true,
-                    error: None,
-                };
-            }
-        }
-    }
 
     let nv = match read_active_nvram() {
         Ok(res) => res,
@@ -605,56 +588,6 @@ pub fn probe_gpu_capabilities() -> GpuCapabilities {
     };
 
     // 0. Declarative Driver Contract First (Level 0 Architecture - e.g. Baolongda Jiaolong 16 Pro)
-    if let Some(manifest) = crate::hal::declarative::load_matched_manifest() {
-        let platform_str = manifest.capabilities.cpu_vendor.clone().unwrap_or_else(|| if is_amd { "amd".to_string() } else { "intel".to_string() });
-
-        if !manifest.capabilities.discrete_gpu {
-            return GpuCapabilities {
-                supports_dgpu: false,
-                supports_hybrid: false,
-                supports_igpu_only: false,
-                reason_igpu_unsupported: Some("当前机型为纯核显轻薄架构（无物理独立显卡与 MUX 切换芯片），无需且不支持显卡模式切换。".to_string()),
-                platform: platform_str,
-                is_50_series: false,
-                is_30_series: false,
-                baseboard: baseboard.clone(),
-                gpu_name: gpu_name.clone(),
-                is_safety_locked: false,
-                user_unlocked: false,
-                supports_hotswitch: false,
-                acpi_igpu_active: false,
-            };
-        }
-
-        let is_dual_mode = manifest.capabilities.gpu_mux_type.as_deref() == Some("dual_mode")
-            || (manifest.capabilities.supported_gpu_modes.contains(&"dgpu".to_string())
-                && manifest.capabilities.supported_gpu_modes.contains(&"hybrid".to_string())
-                && !manifest.capabilities.supported_gpu_modes.contains(&"igpu".to_string()))
-            || (manifest.actions.contains_key("set_gpu_mux_hybrid") && !manifest.actions.contains_key("set_gpu_mux_igpu"));
-
-        if is_dual_mode {
-            let allow_geek = crate::system::config::load_config().allow_experimental_igpu_only;
-            return GpuCapabilities {
-                supports_dgpu: true,
-                supports_hybrid: true,
-                supports_igpu_only: allow_geek,
-                reason_igpu_unsupported: if allow_geek {
-                    None
-                } else {
-                    Some("当前模具为双显双模硬件架构（支持独显直连与混合输出），无物理核显直连走线，已锁定保护以防黑屏。".to_string())
-                },
-                platform: platform_str,
-                is_50_series: false,
-                is_30_series: false,
-                baseboard: baseboard.clone(),
-                gpu_name: gpu_name.clone(),
-                is_safety_locked: true,
-                user_unlocked: allow_geek,
-                supports_hotswitch: false,
-                acpi_igpu_active: false,
-            };
-        }
-    }
 
     let (is_50_nvram, project_id) = if let Ok(nv) = read_active_nvram() {
         let is_50 = nv.is_50_series || nv.var_name == OEM_MAGIC_VAR_NAME || nv.ap_version >= 25;
@@ -902,23 +835,6 @@ pub fn write_gpu_mode(target_mode: &str) -> Result<GpuModeHardwareStatus, String
     }
 
     // 0. Declarative Driver Contract First (Level 0 Architecture - e.g. Baolongda Jiaolong 16 Pro)
-    if let Some(manifest) = crate::hal::declarative::load_matched_manifest() {
-        if manifest.actions.contains_key("set_gpu_mux_discrete") || manifest.actions.contains_key("set_gpu_mux_hybrid") {
-            let discrete_only = match target_norm.as_str() {
-                "dgpu" => true,
-                "hybrid" => false,
-                "igpu" => {
-                    return Err("当前模具硬件架构为双显双模，不支持纯核显屏蔽模式。已绝对安全拦截写入！".to_string());
-                }
-                other => return Err(format!("Unknown GPU mode '{}' for declarative driver", other)),
-            };
-            let drv = crate::hal::declarative::DeclarativeHardwareDriver::new(manifest);
-            crate::hal::traits::HardwareDriver::set_gpu_mux(&drv, discrete_only)
-                .map_err(|e| format!("Declarative set_gpu_mux failed: {}", e))?;
-            crate::log_info!("DECLARATIVE_GPU", "Successfully updated GPU MUX via declarative driver: {}", target_mode);
-            return Ok(read_gpu_mode());
-        }
-    }
 
     let target_byte: u8 = if is_amd {
         match target_norm.as_str() {

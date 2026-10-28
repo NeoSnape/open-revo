@@ -1060,17 +1060,6 @@ pub fn ensure_default_profiles() {
                         disk_preset.profile.cpu_pl4_watts = disk_preset.profile.cpu_pl2_watts.saturating_add(pl4_margin);
                         modified = true;
                     }
-                    if let Some(manifest) = crate::hal::declarative::load_matched_manifest() {
-                        if !manifest.capabilities.fan_ramp_rate && disk_preset.profile.fan_ramp_rate {
-                            disk_preset.profile.fan_ramp_rate = false;
-                            modified = true;
-                        }
-                        if !manifest.capabilities.fan_independent_channels && disk_preset.profile.fan_isolated_output {
-                            disk_preset.profile.fan_isolated_output = false;
-                            disk_preset.profile.fan_curve_linked = true;
-                            modified = true;
-                        }
-                    }
                     if modified {
                         if let Ok(json) = serde_json::to_string_pretty(&disk_preset) {
                             let _ = fs::write(&file_path, json);

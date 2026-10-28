@@ -300,29 +300,7 @@ pub fn apply_custom_profile(
 }
 
 /// Dispatches custom profile SPL/sPPT/Temp parameters to declarative hardware (e.g. Baolongda MRID6/BM5235)
-pub fn sync_custom_profile_to_declarative_hardware(profile: &crate::system::config::CustomProfileConfig) {
-    if let Some(manifest) = crate::hal::declarative::load_matched_manifest() {
-        if manifest.id.contains("bld") {
-            let p1 = (profile.cpu_pl1_watts as u8).clamp(25, 120);
-            let p2 = (profile.cpu_pl2_watts as u8).clamp(25, 140);
-            let temp = (profile.cpu_temp_target as u8).clamp(70, 100);
-            let _ = crate::hal::declarative::invoke_raw_mailbox(&[0, 251, 0, 23, 2, p1]);
-            let _ = crate::hal::declarative::invoke_raw_mailbox(&[0, 251, 0, 23, 3, p2]);
-            if profile.cpu_temp_target_enabled {
-                let _ = crate::hal::declarative::invoke_raw_mailbox(&[0, 251, 0, 23, 4, temp]);
-            }
-            if profile.fan_isolated_output || profile.fan_curve_enabled {
-                crate::driver::bld_driver_mgr::set_bld_fan_curve(
-                    profile.cpu_fan_curve.clone(),
-                    profile.gpu_fan_curve.clone(),
-                    profile.fan_ramp_rate,
-                    profile.fan_ramp_speed_ms,
-                );
-                crate::log_info!("EC_TUNING", "BLD synced custom fan curve to 1Hz heartbeat arbiter");
-            }
-            crate::log_info!("EC_TUNING", "BLD synced custom profile: SPL={}W, sPPT={}W, Temp={}°C", p1, p2, temp);
-        }
-    }
+pub fn sync_custom_profile_to_declarative_hardware(_profile: &crate::system::config::CustomProfileConfig) {
 }
 
 #[tauri::command]
@@ -804,6 +782,7 @@ pub fn export_profile_preset(id: String) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+#[allow(unused_variables)]
 pub fn apply_live_custom_tweak(
     pl1: Option<u16>,
     pl2: Option<u16>,
@@ -817,7 +796,7 @@ pub fn apply_live_custom_tweak(
     gpu_core_offset: Option<i32>,
     gpu_mem_offset: Option<i32>,
     fan_speed_cap: Option<u16>,
-    #[allow(non_snake_case)]
+    #[allow(non_snake_case, unused_variables)]
     fanSpeedCap: Option<u16>,
 ) -> Result<(), String> {
     use crate::driver::wmi_ec;
@@ -827,54 +806,6 @@ pub fn apply_live_custom_tweak(
     }
 
     // 0. Declarative Hardware Dispatch (e.g. Baolongda MRID6)
-    if let Some(manifest) = crate::hal::declarative::load_matched_manifest() {
-        if manifest.id.contains("bld") {
-            if let Some(p1) = pl1 {
-                let clamped = (p1 as u8).clamp(25, 120);
-                let _ = crate::hal::declarative::invoke_raw_mailbox(&[0, 251, 0, 23, 2, clamped]);
-                crate::log_info!("EC_TUNING", "BLD applied CPU SPL (PL1) = {}W", clamped);
-            }
-            if let Some(p2) = pl2 {
-                let clamped = (p2 as u8).clamp(25, 140);
-                let _ = crate::hal::declarative::invoke_raw_mailbox(&[0, 251, 0, 23, 3, clamped]);
-                crate::log_info!("EC_TUNING", "BLD applied CPU sPPT (PL2) = {}W", clamped);
-            }
-            if let Some(val) = temp_target {
-                let clamped = val.clamp(70, 100);
-                let _ = crate::hal::declarative::invoke_raw_mailbox(&[0, 251, 0, 23, 4, clamped]);
-                crate::log_info!("EC_TUNING", "BLD applied CPU Temp Wall = {}°C", clamped);
-            }
-            let fan_cap = fanSpeedCap.or(fan_speed_cap);
-            if let Some(cap) = fan_cap {
-                if cap == 0 {
-                    let _ = crate::hal::declarative::invoke_raw_mailbox(&[0, 251, 0, 20, 0]);
-                    let _ = crate::hal::declarative::invoke_raw_mailbox(&[0, 251, 0, 21, 0]);
-                    crate::log_info!("EC_TUNING", "BLD restored factory auto thermal policy");
-                } else {
-                    let cap_val = if cap > 100 { (cap / 100).clamp(28, 58) as u8 } else { (cap as u8).clamp(28, 58) };
-                    let _ = crate::hal::declarative::invoke_raw_mailbox(&[0, 251, 0, 20, 1]);
-                    let _ = crate::hal::declarative::invoke_raw_mailbox(&[0, 251, 0, 21, cap_val]);
-                    crate::log_info!("EC_TUNING", "BLD set fan speed cap = {} ({}00 RPM)", cap_val, cap_val);
-                }
-            }
-        }
-
-        // Apply GPU clock offsets if requested (NVAPI is universal across vendor GPUs)
-        if let (Some(c), Some(m)) = (gpu_core_offset, gpu_mem_offset) {
-            let gpu = crate::driver::gpu_bridge::get_global_gpu();
-            gpu.lock().set_clock_offsets(c, m);
-        } else if let Some(c) = gpu_core_offset {
-            let gpu = crate::driver::gpu_bridge::get_global_gpu();
-            let m = gpu.lock().get_mem_offset();
-            gpu.lock().set_clock_offsets(c, m);
-        } else if let Some(m) = gpu_mem_offset {
-            let gpu = crate::driver::gpu_bridge::get_global_gpu();
-            let c = gpu.lock().get_core_offset();
-            gpu.lock().set_clock_offsets(c, m);
-        }
-
-        return Ok(());
-    }
 
     wmi_ec::wmi_write_ec(wmi_ec::ADDR_TURBO_TRIGGER_1115, 0);
 

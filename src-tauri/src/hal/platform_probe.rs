@@ -26,24 +26,6 @@ pub fn get_platform_channel() -> PlatformChannelKind {
     *DETECTED_CHANNEL.get_or_init(|| {
         // 0. Declarative Driver Contract First (Level 0 Architecture)
         // If an explicit manifest matches DMI, the manifest declares the physical channel!
-        if let Some(manifest) = crate::hal::declarative::load_matched_manifest() {
-            for channel in manifest.channels.values() {
-                match channel {
-                    crate::hal::declarative::model_manifest::ChannelDef::WmiIp3 => {
-                        crate::log_info!("PLATFORM_PROBE", "Platform identified via Manifest: Shenzhen IP3 WMI ({})", manifest.id);
-                        return PlatformChannelKind::Ip3Wmi;
-                    }
-                    crate::hal::declarative::model_manifest::ChannelDef::WmiMailbox { .. } => {
-                        crate::log_info!("PLATFORM_PROBE", "Platform identified via Manifest: WMI Mailbox ({})", manifest.id);
-                        return PlatformChannelKind::WmiMailbox;
-                    }
-                    crate::hal::declarative::model_manifest::ChannelDef::AcpiIoctl { .. } => {
-                        crate::log_info!("PLATFORM_PROBE", "Platform identified via Manifest: ACPI IOCTL ({})", manifest.id);
-                        return PlatformChannelKind::TongfangAcpiKernel;
-                    }
-                }
-            }
-        }
 
         #[cfg(windows)]
         {
@@ -143,13 +125,6 @@ pub fn has_acpi_physical_key_events() -> bool {
 
 /// Returns true if this platform is a modern thin & light / ultrabook (e.g. Wujie, Xingyao series)
 pub fn is_ultrabook() -> bool {
-    if let Some(manifest) = crate::hal::declarative::load_matched_manifest() {
-        if manifest.identity.form_factor == "thin_light" || !manifest.capabilities.discrete_gpu {
-            return true;
-        } else {
-            return false;
-        }
-    }
     matches!(
         get_platform_channel(),
         PlatformChannelKind::WmiMailbox | PlatformChannelKind::Ip3Wmi | PlatformChannelKind::DriverlessWmi

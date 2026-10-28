@@ -36,33 +36,6 @@ pub fn refresh_factory_power_presets(_has_gpu: bool) -> FactoryPowerPresets {
     // 0. Declarative Hardware Manifest Ground Truth:
     // If the active machine matches a declarative driver with explicit power_mode_watts,
     // adopt its authoritative vendor calibration directly.
-    if let Some(manifest) = crate::hal::declarative::load_matched_manifest() {
-        if let Some(ref pmw) = manifest.capabilities.power_mode_watts {
-            let off = pmw.get("office").copied().unwrap_or(45) as u16;
-            let bal = pmw.get("balance").copied().unwrap_or(80) as u16;
-            let tur = pmw.get("turbo").copied().unwrap_or(115) as u16;
-            let gpu_caps = crate::driver::gpu_bridge::probe_gpu_tuning_capabilities();
-            let base_tgp = gpu_caps.base_tgp_max_watts as u16;
-            let max_db = gpu_caps.max_db_watts as u16;
-
-            let presets = FactoryPowerPresets {
-                office_pl1: off,
-                office_pl2: off,
-                office_pl4: off,
-                balance_pl1: bal,
-                balance_pl2: bal,
-                balance_pl4: bal,
-                turbo_pl1: tur,
-                turbo_pl2: tur,
-                turbo_pl4: tur,
-                base_tgp,
-                max_db,
-                hardware_read: true,
-            };
-            *PRESETS_CACHE.write() = Some(presets.clone());
-            return presets;
-        }
-    }
 
     let model_match = crate::system::model_engine::detect_model_profile();
     let profile = &model_match.matched_profile;

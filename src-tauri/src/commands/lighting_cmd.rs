@@ -172,11 +172,7 @@ pub fn get_keyboard_hardware_info(
             }
         }
         "SingleZone" | "SingleZone_RGB" => {
-            let hal = crate::hal::get_hardware_driver();
-            let (is_hw_on, effective_br) = if hal.kind() != crate::hal::DriverKind::TongfangAcpi {
-                let lvl = hal.get_monochrome_backlight().unwrap_or(cfg_brightness);
-                (is_on_cfg && lvl > 0, lvl)
-            } else {
+            let (is_hw_on, effective_br) = {
                 let raw_backlight_status = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_BACKLIGHT_WHITE).unwrap_or(0);
                 let on = !is_sleep && (raw_backlight_status & 0x02) == 0;
                 let br = if on && cfg_brightness > 0 { cfg_brightness } else if on { 4 } else { 0 };
@@ -756,18 +752,6 @@ pub fn set_keyboard_sleep_timeout(seconds: u32, app: tauri::AppHandle) -> Result
     crate::system::config::save_config(&cfg);
 
     // If active model is Declarative (e.g. Xingyao 14), invoke WMI Mailbox
-    let hal = crate::hal::get_hardware_driver();
-    if hal.kind() != crate::hal::DriverKind::TongfangAcpi {
-        let cmd = if seconds == 0 {
-            // Always-on (Disable sleep timeout)
-            vec![0x03, 0x0C, 0x01, 0x00]
-        } else {
-            // Enable hardware power saving auto-timeout
-            vec![0x03, 0x0C, 0x00, 0x00]
-        };
-        crate::log_info!("LIGHTING", "Applying keyboard backlight sleep timeout ({}s) via WMI: {:?}", seconds, cmd);
-        let _ = crate::hal::declarative::invoke_raw_mailbox(&cmd);
-    }
 
     let _ = app.emit("keyboard-sleep-timeout-changed", seconds);
     let _ = app.emit_to("osd", "keyboard-sleep-timeout-changed", seconds);

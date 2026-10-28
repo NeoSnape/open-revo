@@ -73,11 +73,6 @@ pub fn is_discrete_gpu_name(name: &str) -> bool {
 
 pub fn check_dgpu_present() -> bool {
     *DGPU_CACHE.get_or_init(|| {
-        if let Some(manifest) = crate::hal::declarative::load_matched_manifest() {
-            if !manifest.capabilities.discrete_gpu {
-                return false;
-            }
-        }
 
         #[cfg(windows)]
         unsafe {
