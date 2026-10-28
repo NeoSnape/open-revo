@@ -86,12 +86,11 @@ unsafe extern "system" fn low_level_keyboard_proc(
             }
         }
 
-        // 0. Interactive lighting keystroke ingestion (0ms lock-free event push)
+        // Per-key interactive lighting needs an ITE keyboard, which this machine does not have,
+        // so keystrokes are no longer forwarded to the streamer tracker.
         if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
-            crate::driver::streamer::tracker::push_interactive_key_event(vk as i32);
-
             // 0.1 Universal Shortcut Bus (Route 2: Hardware & System Shortcut Dispatch)
-            if let Some(app) = APP_HANDLE.get() {
+            if let (true, Some(app)) = (crate::system::shortcuts::is_enabled(), APP_HANDLE.get()) {
                 let is_ctrl = (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
                 let is_alt = (GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0;
                 let is_shift = (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
