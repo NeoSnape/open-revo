@@ -208,7 +208,6 @@ pub fn run() {
             commands::hardware_cmd::set_bld_fan_speed_cap,
             commands::hardware_cmd::get_gpu_tuning_capabilities,
             commands::hardware_cmd::get_bios_advanced_menu_status,
-            commands::hardware_cmd::toggle_bios_advanced_menu,
             commands::hardware_cmd::reboot_computer,
             commands::hardware_cmd::get_log_status,
             commands::hardware_cmd::set_log_level,

@@ -1041,55 +1041,6 @@ pub fn execute_runtime_hotswitch(enable_igpu: bool) -> Result<(), String> {
 /// - Reads active NVRAM variable (OemMagicVariable or UniWillVariable)
 /// - If 50-series (APVersionCheck >= 25 or OemMagicVariable): Unlocks hardware door via OemMagicDoor first
 /// - Atomically writes both Offset 111 (CPU OC) and Offset 51 (Memory OC) based on motherboard support
-pub fn write_bios_advanced_menu_status(enable: bool) -> Result<BiosMenuStatus, String> {
-    let (_cpu_name, is_amd) = get_cpu_info();
-    if is_amd {
-        return Err("AMD 平台采用 SMU/CBS 架构，主板固件无 Intel 超频菜单开关，已绝对安全拦截写入！".to_string());
-    }
-
-    let mut nv = read_active_nvram()?;
-
-    let cpu_oc_supported = nv.bytes_read > OFFSET_SUPPORT as u32 && nv.buf[OFFSET_SUPPORT] == 1;
-    let mem_oc_supported = nv.bytes_read > OFFSET_MEMORY_OC_SUPPORT as u32 && nv.buf[OFFSET_MEMORY_OC_SUPPORT] == 1;
-
-    // Safety guard: Check if motherboard firmware actually supports either OC menu
-    if !cpu_oc_supported && !mem_oc_supported {
-        return Err("当前机器主板固件或处理器未声明支持高级超频菜单 (CPU 与内存超频均未开放)，已安全拦截写入！".to_string());
-    }
-
-    let target_byte = if enable { 0x01 } else { 0x00 };
-
-    // Update CPU OC switch (Offset 111) if supported
-    if cpu_oc_supported {
-        if nv.bytes_read <= OFFSET_SWITCH as u32 {
-            return Err(format!("NVRAM size ({} bytes) is too small for Offset {}", nv.bytes_read, OFFSET_SWITCH));
-        }
-        nv.buf[OFFSET_SWITCH] = target_byte;
-    }
-
-    // Update Memory OC switch (Offset 51) if supported
-    if mem_oc_supported {
-        if nv.bytes_read <= OFFSET_MEMORY_OC_SWITCH as u32 {
-            return Err(format!("NVRAM size ({} bytes) is too small for Offset {}", nv.bytes_read, OFFSET_MEMORY_OC_SWITCH));
-        }
-        nv.buf[OFFSET_MEMORY_OC_SWITCH] = target_byte;
-    }
-
-    // Commit write back to SPI Flash NVRAM
-    write_active_nvram(nv.var_name, nv.is_50_series, &nv.buf[..nv.bytes_read as usize])?;
-
-    println!(
-        "[OpenRevo NVRAM] Successfully wrote {} bytes to {} (CPU OC: 0x{:02X}, Mem OC: 0x{:02X}, Gen: {})",
-        nv.bytes_read,
-        nv.var_name.trim_matches('\0'),
-        if cpu_oc_supported { nv.buf[OFFSET_SWITCH] } else { 0xFF },
-        if mem_oc_supported { nv.buf[OFFSET_MEMORY_OC_SWITCH] } else { 0xFF },
-        if nv.is_50_series { "50-Series (Door-assisted)" } else { "40-Series (Direct)" }
-    );
-
-    // Read back verification
-    Ok(read_bios_advanced_menu_status())
-}
 
 #[cfg(test)]
 mod tests {

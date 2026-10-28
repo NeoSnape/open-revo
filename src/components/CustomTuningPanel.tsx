@@ -6,7 +6,6 @@ import {
   CustomProfileConfig,
   FanCurvePoint,
   CustomProfilePreset,
-  BiosMenuStatus,
   AppConfig,
   GpuTuningCapabilities,
 } from '../types/hardware';
@@ -114,8 +113,6 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
   const [activeProfileId, setActiveProfileId] = useState<string>('preset_silent_beast');
 
   const [fanCurveTab, setFanCurveTab] = useState<'cpu' | 'gpu'>('cpu');
-  const [biosStatus, setBiosStatus] = useState<BiosMenuStatus | null>(null);
-  const [biosToggling, setBiosToggling] = useState(false);
   const [resetSuccess, setResetSuccess] = useState(false);
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const appConfigRef = useRef<AppConfig | null>(null);
@@ -361,16 +358,6 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
 
   useEffect(() => {
     loadProfilesData();
-
-    // Probe UEFI NVRAM hardware status directly from Motherboard SPI Flash
-    invoke<BiosMenuStatus>('get_bios_advanced_menu_status')
-      .then((res) => {
-        setBiosStatus(res);
-        if (res.hardware_read) {
-          setProfile((prev) => ({ ...prev, bios_oc_enabled: res.enabled }));
-        }
-      })
-      .catch((e) => console.error('Failed to probe BIOS NVRAM status:', e));
 
     let unlistenGpu: (() => void) | undefined;
     listen<GpuTuningCapabilities>('gpu-power-limits-ready', (event) => {
@@ -716,27 +703,6 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
     });
   };
 
-  // Toggle BIOS OC switch with cross-generation NVRAM hardware execution
-  const handleToggleBiosOc = async () => {
-    if (biosStatus?.hardware_read && !biosStatus.supported) {
-      alert('当前机器主板固件或处理器未声明支持高级超频菜单 (Support=0x00)，已安全拦截！');
-      return;
-    }
-
-    const nextVal = !profile.bios_oc_enabled;
-    setBiosToggling(true);
-    try {
-      const res = await invoke<BiosMenuStatus>('toggle_bios_advanced_menu', { enable: nextVal });
-      setBiosStatus(res);
-      setProfile((prev) => ({ ...prev, bios_oc_enabled: res.enabled }));
-    } catch (e: any) {
-      console.error('Failed to toggle BIOS OC menu:', e);
-      alert(`修改高级 BIOS 超频菜单失败: ${e}\n\n请尝试【以管理员身份运行】OpenRevo，以获取读写主板 SPI Flash NVRAM 的 SeSystemEnvironmentPrivilege 权限！`);
-    } finally {
-      setBiosToggling(false);
-    }
-  };
-
   const liveFanDebounceRef = useRef<any>(null);
   const rampDebounceRef = useRef<any>(null);
 
@@ -854,8 +820,8 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'space-between',
-          gap: '12px',
-          padding: '16px 22px',
+          gap: '8px',
+          padding: '12px 20px 10px',
           fontSize: '12px',
           overflowY: 'auto',
           boxSizing: 'border-box',
@@ -965,9 +931,6 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
             pl1={profile.cpu_pl1_watts}
             pl2={profile.cpu_pl2_watts}
             pl4={profile.cpu_pl4_watts}
-            biosOcEnabled={profile.bios_oc_enabled}
-            biosStatus={biosStatus}
-            biosToggling={biosToggling}
             cpuVendor={modelCaps?.cpu_vendor}
             cpuTuningType={modelCaps?.cpu_tuning_type}
             cpuSupportsFppt={modelCaps?.cpu_supports_fppt}
@@ -980,7 +943,6 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
             onChangePl1={handlePl1Change}
             onChangePl2={handlePl2Change}
             onChangePl4={handlePl4Change}
-            onToggleBiosOc={handleToggleBiosOc}
           />
 
           {/* Column 2: GPU Performance & Overclocking */}
@@ -1100,8 +1062,8 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
             justifyContent: 'space-between',
             alignItems: 'center',
             borderTop: '1px solid rgba(255, 255, 255, 0.08)',
-            paddingTop: '12px',
-            marginTop: '6px',
+            paddingTop: '8px',
+            marginTop: '4px',
             gap: '16px',
             flexShrink: 0,
           }}
@@ -1120,7 +1082,7 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
             <span style={{ fontSize: '13px', lineHeight: 1 }}>⚠️</span>
             <span>
               <strong style={{ color: 'rgba(255, 255, 255, 0.7)' }}>免责声明：</strong>
-              OpenRevo 仅提供底层硬件操控能力，参数配置权完全归属用户。超出出厂规格的极限功耗、温控或频率偏移可能导致硬件保护性黑屏、断电或重置，请根据整机散热与供电合理调校，相关风险由操作者自负。
+超出出厂规格的功耗、温度墙或超频可能触发保护性黑屏 / 断电，风险自负。
             </span>
           </div>
 
@@ -1131,8 +1093,8 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
               <button
                 onClick={onClose}
                 style={{
-                  height: '36px',
-                  padding: '0 20px',
+                  height: '30px',
+                  padding: '0 18px',
                   borderRadius: '8px',
                   fontSize: '12px',
                   fontWeight: 600,

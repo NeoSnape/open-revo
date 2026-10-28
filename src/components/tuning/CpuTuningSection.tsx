@@ -1,8 +1,7 @@
 import React from 'react';
 import { Cpu } from 'lucide-react';
-import { BiosMenuStatus } from '../../types/hardware';
 import { CpuPlSliderRow } from './CpuPlSliderRow';
-import { CpuBiosOcRow } from './CpuBiosOcRow';
+import { CpuTempWallHint } from './CpuTempWallHint';
 import { HardwareTelemetryBar } from './HardwareTelemetryBar';
 
 export interface CpuTuningSectionProps {
@@ -41,15 +40,11 @@ export interface CpuTuningSectionProps {
   cpuTuningType?: 'intel_pl' | 'amd_smu' | 'none' | string;
   cpuSupportsFppt?: boolean;
   cpuName?: string;
-  biosOcEnabled: boolean;
-  biosStatus: BiosMenuStatus | null;
-  biosToggling: boolean;
   onToggleTempTarget: (enabled: boolean) => void;
   onChangeTempTarget: (temp: number) => void;
   onChangePl1: (pl1: number) => void;
   onChangePl2: (pl2: number) => void;
   onChangePl4: (pl4: number) => void;
-  onToggleBiosOc: () => void;
 }
 
 export const CpuTuningSection: React.FC<CpuTuningSectionProps> = ({
@@ -86,15 +81,11 @@ export const CpuTuningSection: React.FC<CpuTuningSectionProps> = ({
   pl1,
   pl2,
   pl4,
-  biosOcEnabled,
-  biosStatus,
-  biosToggling,
   onToggleTempTarget,
   onChangeTempTarget,
   onChangePl1,
   onChangePl2,
   onChangePl4,
-  onToggleBiosOc,
 }) => {
   const isApuOrIgpu = discreteGpu === false;
 
@@ -217,7 +208,7 @@ export const CpuTuningSection: React.FC<CpuTuningSectionProps> = ({
                     <span style={{ fontSize: '10px', color: 'var(--text-dim)', minWidth: '40px', textAlign: 'right' }}>
                       {isAmdPlatform
                         ? (effectiveTempTarget < 95 ? `限频 -${95 - effectiveTempTarget}°C` : '满血')
-                        : `Tcc-${Math.max(0, (tempTargetMax > maxTempWall ? tempTargetMax : maxTempWall) - effectiveTempTarget)}`}
+                        : `Tcc-${Math.max(0, maxTempWall - effectiveTempTarget)}`}
                     </span>
                   </div>
                   <div
@@ -314,12 +305,7 @@ export const CpuTuningSection: React.FC<CpuTuningSectionProps> = ({
       />
 
       {/* BIOS Advanced Switch */}
-      <CpuBiosOcRow
-        biosStatus={biosStatus}
-        biosOcEnabled={biosOcEnabled}
-        biosToggling={biosToggling}
-        onToggleBiosOc={onToggleBiosOc}
-      />
+      <CpuTempWallHint />
       </div>
 
       {/* Unified Real-Time Hardware Telemetry Monitor */}

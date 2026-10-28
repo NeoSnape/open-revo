@@ -3364,3 +3364,18 @@ body,
 [data-theme="mono"] .fan-mode-card { --mode-color: var(--text-primary); }
 [data-theme="mono"] .fan-mode-card:not(.active) { --mode-color: var(--text-secondary); }
 [data-theme="mono"] .fan-view-icon { color: var(--text-primary); }
+
+.cpu-tempwall-hint {
+  margin-top: 4px;
+  gap: 2px;
+}
+.cpu-tempwall-hint-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 11px;
+}
+.cpu-tempwall-hint-text {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}

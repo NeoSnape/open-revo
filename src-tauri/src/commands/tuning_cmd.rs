@@ -917,18 +917,6 @@ pub fn get_bios_advanced_menu_status() -> crate::driver::uefi_nvram::BiosMenuSta
 }
 
 #[tauri::command]
-pub fn toggle_bios_advanced_menu(enable: bool) -> Result<crate::driver::uefi_nvram::BiosMenuStatus, String> {
-    let mut cfg = crate::system::config::load_config();
-    cfg.custom_profile.bios_oc_enabled = enable;
-    crate::system::config::save_config(&cfg);
-
-    match crate::driver::uefi_nvram::write_bios_advanced_menu_status(enable) {
-        Ok(status) => Ok(status),
-        Err(e) => Err(e),
-    }
-}
-
-#[tauri::command]
 pub fn get_model_profile_info() -> crate::system::model_engine::ModelMatchResult {
     crate::system::model_engine::detect_model_profile()
 }
