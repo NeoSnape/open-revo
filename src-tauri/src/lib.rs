@@ -257,6 +257,8 @@ pub fn run() {
             crate::system::telemetry::report_window_visibility,
             crate::system::telemetry::get_telemetry_heartbeat_status,
             commands::shortcut_cmd::get_registered_shortcuts,
+            commands::shortcut_cmd::get_shortcuts_enabled,
+            commands::shortcut_cmd::set_shortcuts_enabled,
             commands::shortcut_cmd::register_custom_shortcut,
             commands::shortcut_cmd::unregister_custom_shortcut,
             commands::shortcut_cmd::trigger_shortcut_action,

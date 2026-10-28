@@ -265,6 +265,21 @@ pub fn toggle_oem_service(
     if take_over {
         let _ = service_mgr::pause_oem_services();
 
+        // The OEM services are now set to manual start: without autostart nothing would
+        // manage fans/power after a reboot, so takeover always implies autostart.
+        if !autostart::is_autostart_enabled() {
+            match autostart::set_autostart_enabled(true) {
+                Ok(v) => {
+                    let mut c = crate::system::config::load_config();
+                    c.autostart = v;
+                    crate::system::config::save_config(&c);
+                    cfg.autostart = v;
+                    crate::log_info!("TAKEOVER", "Autostart enabled together with OEM takeover");
+                }
+                Err(e) => crate::log_warn!("TAKEOVER", "Could not enable autostart with takeover: {}", e),
+            }
+        }
+
         std::thread::spawn(|| {
             std::thread::sleep(std::time::Duration::from_millis(600));
             let lighting = crate::driver::ite_lighting::get_global_lighting();

@@ -11,8 +11,26 @@ pub use manager::{
     unload_plugin_shortcuts, unregister_shortcut,
 };
 
+/// Master switch for all global shortcuts, mirrored from `AppConfig::shortcuts_enabled`
+/// so the low-level keyboard hook never has to touch the config lock.
+pub static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn is_enabled() -> bool {
+    ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Persist and apply the global shortcut master switch.
+pub fn set_enabled(enabled: bool) {
+    let mut cfg = crate::system::config::load_config();
+    cfg.shortcuts_enabled = enabled;
+    crate::system::config::save_config(&cfg);
+    ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    crate::log_info!("SHORTCUTS", "Global shortcuts {}", if enabled { "enabled" } else { "disabled" });
+}
+
 /// Initialize default system shortcuts and load plugin shortcuts
 pub fn init_shortcuts() {
+    ENABLED.store(crate::system::config::load_config().shortcuts_enabled, std::sync::atomic::Ordering::Relaxed);
     crate::log_info!("SHORTCUTS", "Initializing OpenRevo Universal Shortcut Bus...");
 
     // Register high-value default shortcuts if none exist
@@ -23,7 +41,7 @@ pub fn init_shortcuts() {
         action: ShortcutAction::ToggleFanBoost,
         osd: true,
         enabled: true,
-        swallow: false,
+        swallow: true,
         plugin_id: None,
     });
 
@@ -34,7 +52,7 @@ pub fn init_shortcuts() {
         action: ShortcutAction::CyclePowerMode,
         osd: true,
         enabled: true,
-        swallow: false,
+        swallow: true,
         plugin_id: None,
     });
 
@@ -45,7 +63,7 @@ pub fn init_shortcuts() {
         action: ShortcutAction::ToggleRefreshRate,
         osd: true,
         enabled: true,
-        swallow: false,
+        swallow: true,
         plugin_id: None,
     });
 }

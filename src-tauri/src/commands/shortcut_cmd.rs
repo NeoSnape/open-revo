@@ -52,3 +52,14 @@ pub fn trigger_shortcut_action(
     crate::system::shortcuts::dispatcher::dispatch_action(app, dummy_binding);
     Ok(())
 }
+
+#[tauri::command]
+pub fn get_shortcuts_enabled() -> bool {
+    crate::system::shortcuts::is_enabled()
+}
+
+#[tauri::command]
+pub fn set_shortcuts_enabled(enabled: bool) -> bool {
+    crate::system::shortcuts::set_enabled(enabled);
+    enabled
+}

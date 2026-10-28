@@ -393,7 +393,7 @@ fn default_fan_d() -> u8 { 0 }
 fn default_strategy() -> String { "smart".to_string() }
 fn default_cooler_pump_start_temp() -> u8 { 55 }
 fn default_cooler_pump_turbo_temp() -> u8 { 90 }
-fn default_refresh_rate() -> u32 { 240 }
+fn default_refresh_rate() -> u32 { 300 }
 fn default_osd_theme() -> String { "cinema".to_string() }
 fn default_osd_scale() -> String { "100%".to_string() }
 fn default_osd_position() -> String { "top-left".to_string() }
@@ -424,7 +424,7 @@ impl Default for AppConfig {
             cooler_pump_start_temp: 55,
             cooler_pump_turbo_temp: 90,
 
-            refresh_rate: 240,
+            refresh_rate: 300,
             miniled_enabled: false,
 
             wifi_enabled: true,

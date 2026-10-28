@@ -120,6 +120,9 @@ pub fn check_match_and_trigger(
     is_shift: bool,
     is_win: bool,
 ) -> bool {
+    if !super::is_enabled() {
+        return false;
+    }
     let matched_entry: Option<(ShortcutBinding, bool)> = {
         let look_guard = LOOKUP.read().unwrap();
         let Some(ref look) = *look_guard else {
