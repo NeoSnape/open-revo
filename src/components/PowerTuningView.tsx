@@ -517,9 +517,7 @@ export const PowerTuningView: React.FC = () => {
             电池健康
           </div>
           <div className="battery-ec-readback">
-            {powerInfo.ec_charge_stop != null && powerInfo.ec_charge_resume != null
-              ? `EC 实际：充到 ${powerInfo.ec_charge_stop}% 停止 · 低于 ${powerInfo.ec_charge_resume}% 复充`
-              : '主板硬件级充电控制'}
+            本机 EC 不执行充电上限（已实测：写入 60/40 后仍充到 100%）
           </div>
         </div>
 
@@ -578,7 +576,7 @@ export const PowerTuningView: React.FC = () => {
                   <span className="battery-mode-window">40% ~ 60%</span>
                 </div>
                 <div style={{ fontSize: '9.5px', color: 'var(--text-dim)', lineHeight: '1.35', marginTop: '1px' }}>
-                  长期插电使用时推荐。充到 60% 停充，低于 40% 才重新充电。插着电不会主动放电：当前电量高于 60% 时，需要拔电用到 60% 以下才进入区间。
+                  官方定义为保持 40%~60%。本机 EC 不支持（支持位 MyBat 未开启），选择后不会生效。
                 </div>
               </div>
             </div>
