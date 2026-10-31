@@ -335,6 +335,7 @@ pub fn run() {
 
             crate::system::telemetry::start_status_logger(ec_for_status, gpu_for_status);
             crate::system::rtss_osd::start(ec_for_rtss, gpu_for_rtss);
+            crate::system::rtss_frametime::start();
 
             // Step 6.11: Start adaptive dynamic telemetry heartbeat broadcaster
             crate::system::boot_trace::boot_scope("Step 6.11: Telemetry Heartbeat", || {
