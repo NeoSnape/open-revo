@@ -62,3 +62,8 @@ Copy-Item E:\ClaudeformygamePC\CCX_RE\builds\open-revo-thetcx.exe E:\OpenRevo-v0
 - 换回上游：退出 OpenRevo，把 `open-revo.v0.9.3-upstream.exe` 改回 `open-revo.exe`。
 - 回官方控制中心：在 OpenRevo 里关闭「接管官方控制台」（会恢复 GCUBridge 自动启动），或手动
   `sc config GCUBridge start= auto` + `sc start GCUBridge`（管理员）。
+
+## 构建
+
+必须用 `pnpm tauri build --no-bundle`（产物 `src-tauri/target/release/open-revo.exe`）。
+直接 `cargo build --release` 不会开启 `custom-protocol`，界面会去连开发服务器 `localhost:1420`，打开就是 ERR_CONNECTION_REFUSED。
