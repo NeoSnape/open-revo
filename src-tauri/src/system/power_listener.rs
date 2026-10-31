@@ -51,7 +51,7 @@ fn handle_sleep_auto_office() {
     if cfg.sleep_auto_office {
         let cur_mode = cfg.power_mode;
         if cur_mode != 1 {
-            println!("[Sleep Guard] Auto-switching from mode {} to Office Mode (1) before sleep / lid close!", cur_mode);
+            crate::log_info!("POWER_EVENT", "Auto-switching from mode {} to Office Mode (1) before sleep / lid close!", cur_mode);
             PREV_POWER_MODE.store(cur_mode, Ordering::SeqCst);
             crate::system::power_mode::apply_full_power_mode(1);
         }
@@ -63,7 +63,7 @@ fn handle_wake_auto_office() {
     if cfg.sleep_auto_office {
         let prev = PREV_POWER_MODE.swap(0, Ordering::SeqCst);
         if prev > 1 && prev <= 4 {
-            println!("[Sleep Guard] Waking up! Restoring previous power mode: {}", prev);
+            crate::log_info!("POWER_EVENT", "Waking up! Restoring previous power mode: {}", prev);
             crate::system::power_mode::apply_full_power_mode(prev);
         }
     }
@@ -72,7 +72,7 @@ fn handle_wake_auto_office() {
 fn handle_system_resume_pipeline(event_name: &str) {
     crate::system::telemetry::set_screen_suspended(false);
     if crate::hal::platform_probe::is_ultrabook() {
-        println!("[Power Guard] Ultrabook {}! Restoring power mode only.", event_name);
+        crate::log_info!("POWER_EVENT", "Ultrabook {}! Restoring power mode only.", event_name);
         handle_wake_auto_office();
         std::thread::spawn(|| {
             std::thread::sleep(std::time::Duration::from_millis(500));
@@ -81,7 +81,7 @@ fn handle_system_resume_pipeline(event_name: &str) {
         return;
     }
 
-    println!("[Power Guard] Laptop {}! Restoring power mode, cooler & lighting...", event_name);
+    crate::log_info!("POWER_EVENT", "Laptop {}! Restoring power mode, cooler & lighting...", event_name);
     handle_wake_auto_office();
 
     std::thread::spawn(|| {
@@ -94,8 +94,7 @@ fn handle_system_resume_pipeline(event_name: &str) {
     if let Some(ec) = GLOBAL_EC.read().clone() {
         let cfg_limit = cfg.battery_limit;
         let cfg_override = cfg.battery_hardware_limit_enabled;
-        println!(
-            "[Power Guard] System resumed: Re-asserting battery limit ({}%) with override={}",
+        crate::log_info!("POWER_EVENT", "System resumed: Re-asserting battery limit ({}%) with override={}",
             cfg_limit, cfg_override
         );
         ec.lock().apply_battery_limit_with_override(cfg_limit, cfg_override);
@@ -164,13 +163,13 @@ unsafe extern "system" fn power_wnd_proc(
                 // NEVER degrade power mode to Office (1) and NEVER shut down water cooling!
                 let is_running_tasks = crate::system::switches::is_keep_awake() || crate::system::switches::is_screen_off();
                 if is_running_tasks {
-                    println!("[Power Guard] Standby event received but Keep-Awake or Screen-Off is ACTIVE. Preserving active power mode and water cooling for background tasks.");
+                    crate::log_info!("POWER_EVENT", "Standby event received but Keep-Awake or Screen-Off is ACTIVE. Preserving active power mode and water cooling for background tasks.");
                 } else if crate::hal::platform_probe::is_ultrabook() {
-                    println!("[Power Guard] Ultrabook entering Standby: skipping water cooler & lighting suspension.");
+                    crate::log_info!("POWER_EVENT", "Ultrabook entering Standby: skipping water cooler & lighting suspension.");
                     crate::system::telemetry::set_screen_suspended(true);
                     handle_sleep_auto_office();
                 } else {
-                    println!("[Power Guard] System is entering Sleep / Hibernate / Standby! Stopping water cooler & suspending lighting...");
+                    crate::log_info!("POWER_EVENT", "System is entering Sleep / Hibernate / Standby! Stopping water cooler & suspending lighting...");
                     crate::system::telemetry::set_screen_suspended(true);
                     handle_sleep_auto_office();
                     let streamer = crate::driver::ite_streamer::get_global_streamer();
@@ -191,16 +190,16 @@ unsafe extern "system" fn power_wnd_proc(
                         if prev == -1 {
                             // Windows automatically posts initial state upon RegisterPowerSettingNotification.
                             // Record baseline only; NEVER trigger a false wake/resume pipeline on app startup!
-                            println!("[Power Guard] Initial lid state registered: {} (startup baseline set)", if lid_state == 0 { "Closed" } else { "Open" });
+                            crate::log_info!("POWER_EVENT", "Initial lid state registered: {} (startup baseline set)", if lid_state == 0 { "Closed" } else { "Open" });
                         } else if prev != lid_state as i8 {
                             // 0 = Lid Closed, 1 = Lid Open
                             if lid_state == 0 {
                                 crate::system::telemetry::set_screen_suspended(true);
                                 if crate::hal::platform_probe::is_ultrabook() {
-                                    println!("[Power Guard] Ultrabook lid closed! Adjusting power mode only.");
+                                    crate::log_info!("POWER_EVENT", "Ultrabook lid closed! Adjusting power mode only.");
                                     handle_sleep_auto_office();
                                 } else {
-                                    println!("[Power Guard] Laptop lid closed! Switching to office & stopping water cooler...");
+                                    crate::log_info!("POWER_EVENT", "Laptop lid closed! Switching to office & stopping water cooler...");
                                     handle_sleep_auto_office();
                                     let streamer = crate::driver::ite_streamer::get_global_streamer();
                                     streamer.suspend_for_sleep();
@@ -221,7 +220,7 @@ unsafe extern "system" fn power_wnd_proc(
             LRESULT(1)
         }
         WM_QUERYENDSESSION | WM_ENDSESSION => {
-            println!("[Power Guard] System is shutting down or restarting! Stopping water cooler & lighting...");
+            crate::log_info!("POWER_EVENT", "System is shutting down or restarting! Stopping water cooler & lighting...");
             crate::system::telemetry::set_screen_suspended(true);
             crate::system::display_tuning::reset_display_tuning_to_default();
             if !crate::hal::platform_probe::is_ultrabook() {
@@ -279,7 +278,7 @@ pub fn start_power_event_watcher() {
         );
 
         if hwnd.is_err() {
-            eprintln!("[Power Guard] Failed to create power watcher window");
+            crate::log_error!("POWER_EVENT", "Failed to create power watcher window");
             return;
         }
 
@@ -293,7 +292,7 @@ pub fn start_power_event_watcher() {
             DEVICE_NOTIFY_WINDOW_HANDLE,
         );
 
-        println!("[Power Guard] Dedicated power event listener successfully registered and running.");
+        crate::log_info!("POWER_EVENT", "Dedicated power event listener successfully registered and running.");
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, HWND::default(), 0, 0).as_bool() {

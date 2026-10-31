@@ -92,6 +92,8 @@ pub fn run() {
     let ec_for_power_listener = Arc::clone(&ec_instance);
     let ec_for_telemetry = Arc::clone(&ec_instance);
     let gpu_for_telemetry = Arc::clone(&gpu_instance);
+    let ec_for_status = Arc::clone(&ec_instance);
+    let gpu_for_status = Arc::clone(&gpu_instance);
 
     let autostart_plugin = tauri_plugin_autostart::init(
         tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -326,6 +328,8 @@ pub fn run() {
             // Step 6.10: Build and mount system tray menu and listeners
             let tray = crate::system::tray::build_tray(&app.handle(), ec_for_tray)?;
             app.manage(crate::system::tray::TrayKeeper(tray));
+
+            crate::system::telemetry::start_status_logger(ec_for_status, gpu_for_status);
 
             // Step 6.11: Start adaptive dynamic telemetry heartbeat broadcaster
             crate::system::boot_trace::boot_scope("Step 6.11: Telemetry Heartbeat", || {

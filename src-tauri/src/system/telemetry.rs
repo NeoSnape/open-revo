@@ -174,3 +174,36 @@ pub fn get_telemetry_heartbeat_status() -> Result<serde_json::Value, String> {
         "query_gpu": query_gpu,
     }))
 }
+
+/// One INFO line per minute so a few days of use can be reviewed from the log
+/// (fan curve vs. temperature, power limits, battery charge window).
+pub fn start_status_logger(
+    ec_bridge: crate::driver::ec_bridge::SharedEcBridge,
+    gpu_bridge: crate::driver::gpu_bridge::SharedGpuBridge,
+) {
+    std::thread::Builder::new()
+        .name("openrevo-status-log".into())
+        .spawn(move || loop {
+            std::thread::sleep(Duration::from_secs(60));
+            if SCREEN_SUSPENDED.load(Ordering::SeqCst) {
+                continue;
+            }
+            let cfg = crate::system::config::load_config();
+            // Only query NVAPI when the dGPU is always on anyway (MUX direct); never wake it in hybrid.
+            let query_gpu = cfg.gpu_mode == "dgpu";
+            let s = collect_hardware_state(&ec_bridge, &gpu_bridge, query_gpu);
+            let (bat, _, charging) = crate::commands::power_cmd::get_live_power_status();
+            let stop = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_BATTERY_LIMIT_UP).unwrap_or(0);
+            let resume = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_BATTERY_LIMIT_DOWN).unwrap_or(0);
+            crate::log_info!(
+                "STATUS",
+                "mode={} boost={} fanpol={} | CPU {}C {:.1}W {}MHz {}% | GPU {}C {:.1}W {}MHz {}% | fan {}/{} rpm | bat {}% ac={} chg={} window={}/{}",
+                s.power_mode, s.fan_boost as u8, cfg.preset_fan_policy,
+                s.cpu_temp, s.cpu_power_w, s.cpu_freq, s.cpu_usage,
+                s.gpu_temp, s.gpu_power_w, s.gpu_core_freq, s.gpu_usage,
+                s.cpu_fan_rpm, s.gpu_fan_rpm,
+                bat, s.is_dc_online as u8, charging as u8, stop, resume
+            );
+        })
+        .ok();
+}

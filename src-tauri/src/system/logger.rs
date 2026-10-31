@@ -15,6 +15,8 @@ static LOG_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 pub const LOG_LEVEL_OFF: u8 = 0;
 pub const LOG_LEVEL_ERROR: u8 = 1;
 pub const LOG_LEVEL_ALL: u8 = 2;
+/// thetcx default: INFO / WARN / ERROR / PANIC on disk, DEBUG skipped (EC reads log at DEBUG).
+pub const LOG_LEVEL_INFO: u8 = 3;
 
 pub static CLI_LOG_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -112,8 +114,9 @@ pub fn init_from_cli() -> u8 {
         crate::system::config::save_config(&cfg);
         cfg.log_level
     } else {
+        // This fork logs by default so a few days of use can be reviewed afterwards.
         set_cli_log_active(false);
-        LOG_LEVEL_OFF
+        LOG_LEVEL_INFO
     };
 
     let effective_filter = if has_cli_log {
@@ -149,7 +152,33 @@ static CURRENT_LOG_LEVEL: AtomicU8 = AtomicU8::new(LOG_LEVEL_ERROR);
 static ACTIVE_FILTER_RAW: LazyLock<RwLock<Option<String>>> = LazyLock::new(|| RwLock::new(None));
 static ACTIVE_MODULE_PATTERNS: LazyLock<RwLock<Option<Vec<String>>>> = LazyLock::new(|| RwLock::new(None));
 
-const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024; // 10 MB threshold
+const MAX_LOG_SIZE: u64 = 8 * 1024 * 1024; // rotate to open-revo.log.1 above 8 MB
+static WRITES_SINCE_CHECK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Keep one previous generation instead of truncating (caller holds LOG_MUTEX).
+fn rotate_if_needed(path: &std::path::Path) {
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.len() > MAX_LOG_SIZE {
+            let old = path.with_extension("log.1");
+            let _ = std::fs::remove_file(&old);
+            let _ = std::fs::rename(path, &old);
+        }
+    }
+}
+
+/// Local wall-clock timestamp, e.g. 2026-10-31 14:16:48.123
+fn local_timestamp() -> String {
+    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
+        t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds
+    )
+}
+
+/// DEBUG lines are only formatted when they will be written (EC reads log at DEBUG).
+pub fn debug_enabled() -> bool {
+    CURRENT_LOG_LEVEL.load(Ordering::Relaxed) == LOG_LEVEL_ALL
+}
 
 /// Expands user-friendly category aliases or keywords into concrete uppercase module tag patterns.
 pub fn expand_filter_patterns(raw: &str) -> Vec<String> {
@@ -267,16 +296,16 @@ pub fn init_logger_mode(level: u8, filter: Option<&str>) {
     set_log_filter(filter);
     let path = get_log_path();
 
-    // Check if existing log file exceeds threshold; if so, truncate to prevent runaway growth
-    if let Ok(metadata) = std::fs::metadata(&path) {
-        if metadata.len() > MAX_LOG_SIZE {
-            let _ = std::fs::write(&path, b"[OpenRevo Log Truncated - Exceeded 10MB]\n");
-        }
+    // Rotate instead of truncating so the previous few days survive
+    {
+        let _guard = LOG_MUTEX.lock();
+        rotate_if_needed(&path);
     }
 
     let mode_str = match level {
         LOG_LEVEL_ALL => "ALL (Verbose: DEBUG/INFO/WARN/ERROR/PANIC)",
         LOG_LEVEL_ERROR => "ERROR_ONLY (Safe: WARN/ERROR/PANIC)",
+        LOG_LEVEL_INFO => "INFO (INFO/WARN/ERROR/PANIC)",
         _ => "OFF (Zero disk wear: WARN/INFO/DEBUG bypassed)",
     };
     let filter_str = match get_log_filter() {
@@ -372,13 +401,7 @@ pub fn log_raw(level: &str, module: &str, message: &str) {
         return;
     }
 
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = now.as_secs();
-    let millis = now.subsec_millis();
-
-    let formatted_time = format!("{}.{:03}", secs, millis);
+    let formatted_time = local_timestamp();
     let log_line = format!("[{}] [{}] [{}] {}\n", formatted_time, level, module, message);
 
     // 2. Always print to standard console (when attached)
@@ -392,12 +415,16 @@ pub fn log_raw(level: &str, module: &str, message: &str) {
     let should_write = match current_level {
         LOG_LEVEL_ALL => true,
         LOG_LEVEL_ERROR => is_warn_or_fatal,
+        LOG_LEVEL_INFO => level != "DEBUG",
         _ => is_fatal, // Strictly zero disk writes for normal users; only severe fatal crashes/errors recorded
     };
 
     if should_write {
         let _guard = LOG_MUTEX.lock();
         let path = get_log_path();
+        if WRITES_SINCE_CHECK.fetch_add(1, Ordering::Relaxed) % 500 == 0 {
+            rotate_if_needed(&path);
+        }
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
             let _ = file.write_all(log_line.as_bytes());
             let _ = file.flush();
@@ -429,6 +456,8 @@ macro_rules! log_error {
 #[macro_export]
 macro_rules! log_debug {
     ($module:expr, $($arg:tt)*) => {
-        $crate::system::logger::log_raw("DEBUG", $module, &format!($($arg)*))
+        if $crate::system::logger::debug_enabled() {
+            $crate::system::logger::log_raw("DEBUG", $module, &format!($($arg)*))
+        }
     };
 }
