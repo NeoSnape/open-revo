@@ -86,3 +86,55 @@ pub fn read_ec_fan_table() -> Result<EcFanTableSnapshot, String> {
         gpu_duty_pct: pct(read16(wmi_ec::ADDR_RAMFAN_GPU_DUTY_BASE)?),
     })
 }
+
+#[derive(Serialize)]
+pub struct FanApplyStatus {
+    /// "applied" | "mismatch" | "fan_boost" | "unreadable"
+    pub state: String,
+    /// What the expected table is based on, e.g. "办公 · 分模式调校" / "自定义曲线".
+    pub source: String,
+    pub ec: Option<EcFanTableSnapshot>,
+}
+
+/// Compare the EC fan table with what the current mode should have written.
+#[tauri::command]
+pub fn get_fan_apply_status() -> FanApplyStatus {
+    use crate::system::power::{build_custom_fan_table, get_mode_fan_table};
+    let cfg = crate::system::config::load_config();
+    let ec = read_ec_fan_table().ok();
+
+    if cfg.fan_boost {
+        return FanApplyStatus { state: "fan_boost".into(), source: "一键强冷".into(), ec };
+    }
+
+    let policy_name = if cfg.preset_fan_policy == crate::machine::FAN_POLICY_OFFICIAL { "官方原厂" } else { "分模式调校" };
+    let (expected, source) = match cfg.power_mode {
+        1 => (get_mode_fan_table(1), format!("办公 · {}", policy_name)),
+        3 => (get_mode_fan_table(3), format!("狂暴 · {}", policy_name)),
+        4 => {
+            let p = &cfg.custom_profile;
+            if p.fan_curve_enabled || p.fan_isolated_output {
+                (build_custom_fan_table(&p.cpu_fan_curve, &p.gpu_fan_curve), "自定义曲线".to_string())
+            } else {
+                (get_mode_fan_table(3), format!("自定义 · 狂暴{}表", policy_name))
+            }
+        }
+        _ => (get_mode_fan_table(2), format!("均衡 · {}", policy_name)),
+    };
+
+    let Some(snap) = ec else {
+        return FanApplyStatus { state: "unreadable".into(), source, ec: None };
+    };
+
+    let pct = |d: u8| ((d as u16 * 100 + 100) / 200) as u8;
+    let cpu_ok = snap.cpu_upt[..] == expected.cpu_upt[..]
+        && (1..16).all(|i| snap.cpu_duty_pct[i] == pct(expected.cpu_duty[i]));
+    let gpu_ok = snap.gpu_upt[..] == expected.gpu_upt[..]
+        && (1..13).all(|i| snap.gpu_duty_pct[i] == pct(expected.gpu_duty[i]));
+
+    FanApplyStatus {
+        state: if cpu_ok && gpu_ok { "applied".into() } else { "mismatch".into() },
+        source,
+        ec: Some(snap),
+    }
+}

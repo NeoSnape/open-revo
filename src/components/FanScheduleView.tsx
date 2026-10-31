@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Fan, RefreshCw, Info } from 'lucide-react';
+import { Fan, RefreshCw, CheckCircle2, AlertTriangle, Wind } from 'lucide-react';
 import { HardwareState } from '../types/hardware';
 
 interface CurvePoint {
@@ -27,6 +27,12 @@ interface EcFanTableSnapshot {
   gpu_upt: number[];
   gpu_downt: number[];
   gpu_duty_pct: number[];
+}
+
+interface FanApplyStatus {
+  state: 'applied' | 'mismatch' | 'fan_boost' | 'unreadable';
+  source: string;
+  ec: EcFanTableSnapshot | null;
 }
 
 const MODE_META: Record<number, { name: string; power: string; cls: string }> = {
@@ -92,7 +98,8 @@ export const FanScheduleView: React.FC<FanScheduleViewProps> = ({ status }) => {
   const [info, setInfo] = useState<PresetFanInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [ecTable, setEcTable] = useState<EcFanTableSnapshot | null>(null);
+  const [apply, setApply] = useState<FanApplyStatus | null>(null);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     invoke<PresetFanInfo>('get_preset_fan_info')
@@ -113,14 +120,26 @@ export const FanScheduleView: React.FC<FanScheduleViewProps> = ({ status }) => {
     }
   };
 
-  const readEc = useCallback(async () => {
-    setError(null);
+  const checkApplied = useCallback(async () => {
+    setChecking(true);
     try {
-      setEcTable(await invoke<EcFanTableSnapshot>('read_ec_fan_table'));
+      setApply(await invoke<FanApplyStatus>('get_fan_apply_status'));
     } catch (e) {
       setError(`读取 EC 风扇表失败：${e}`);
+    } finally {
+      setChecking(false);
     }
   }, []);
+
+  // Verify on entering the page, and again shortly after a mode / policy / boost change
+  // (the EC write runs on a background thread).
+  useEffect(() => {
+    checkApplied();
+    const t = setTimeout(checkApplied, 1500);
+    return () => clearTimeout(t);
+  }, [checkApplied, status.power_mode, status.fan_boost, info?.policy]);
+
+  const ecTable = apply?.ec ?? null;
 
   const activeMode = status.power_mode;
 
@@ -192,12 +211,32 @@ export const FanScheduleView: React.FC<FanScheduleViewProps> = ({ status }) => {
       <div className="glass-card fan-ec-card">
         <div className="fan-ec-head">
           <div>
-            <div className="fan-view-heading">EC 当前生效风扇表</div>
-            <div className="fan-view-sub">只读，直接读取主板 EC 内存，用来确认写入是否生效。</div>
+            <div className="fan-view-heading">
+              EC 当前生效风扇表
+              {apply?.state === 'applied' && (
+                <span className="fan-apply-badge ok">
+                  <CheckCircle2 className="w-3.5 h-3.5" />已应用
+                </span>
+              )}
+              {apply?.state === 'mismatch' && (
+                <span className="fan-apply-badge bad">
+                  <AlertTriangle className="w-3.5 h-3.5" />与预期不一致
+                </span>
+              )}
+              {apply?.state === 'fan_boost' && (
+                <span className="fan-apply-badge info">
+                  <Wind className="w-3.5 h-3.5" />一键强冷中
+                </span>
+              )}
+              {apply?.state === 'unreadable' && <span className="fan-apply-badge bad">无法读取 EC</span>}
+            </div>
+            <div className="fan-view-sub">
+              {apply ? `预期：${apply.source}。` : ''}进入本页和切换模式后自动读取主板 EC 并比对。
+            </div>
           </div>
-          <button className="toggle-btn" onClick={readEc}>
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>读取</span>
+          <button className="toggle-btn" onClick={checkApplied} disabled={checking}>
+            <RefreshCw className={`w-3.5 h-3.5 ${checking ? 'spin-icon' : ''}`} />
+            <span>刷新</span>
           </button>
         </div>
         {ecTable ? (
@@ -221,10 +260,7 @@ export const FanScheduleView: React.FC<FanScheduleViewProps> = ({ status }) => {
             </tbody>
           </table>
         ) : (
-          <div className="fan-ec-empty">
-            <Info className="w-3.5 h-3.5" />
-            <span>点击「读取」查看当前 16 级风扇表</span>
-          </div>
+          <div className="fan-ec-empty">{checking ? '正在读取…' : '暂无数据'}</div>
         )}
       </div>
     </div>

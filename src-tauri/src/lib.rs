@@ -258,6 +258,7 @@ pub fn run() {
             commands::fan_cmd::get_preset_fan_info,
             commands::fan_cmd::set_preset_fan_policy,
             commands::fan_cmd::read_ec_fan_table,
+            commands::fan_cmd::get_fan_apply_status,
             commands::shortcut_cmd::get_registered_shortcuts,
             commands::shortcut_cmd::get_shortcuts_enabled,
             commands::shortcut_cmd::set_shortcuts_enabled,

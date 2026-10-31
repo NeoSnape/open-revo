@@ -23,6 +23,10 @@ pub struct PowerSettingsInfo {
     pub sleep_deep_sleep: bool,
     pub sleep_hibernate_30m: bool,
     pub sleep_auto_office: bool,
+    /// Raw EC readback: charge stop %, charge resume %, protection mode byte (None if unreadable).
+    pub ec_charge_stop: Option<u8>,
+    pub ec_charge_resume: Option<u8>,
+    pub ec_battery_mode_byte: Option<u8>,
 }
 
 pub use crate::system::power::ppm::WindowsPowerScheme;
@@ -583,6 +587,9 @@ pub fn query_sleep_guard_registry_states(cfg: &crate::system::config::AppConfig)
         sleep_deep_sleep,
         sleep_hibernate_30m,
         sleep_auto_office: cfg.sleep_auto_office,
+        ec_charge_stop: crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_BATTERY_LIMIT_UP),
+        ec_charge_resume: crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_BATTERY_LIMIT_DOWN),
+        ec_battery_mode_byte: crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_BATTERY_PROTECTION_MODE),
     }
 }
 

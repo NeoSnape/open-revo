@@ -27,7 +27,7 @@ impl MechrevoHardwareHAL for MechrevoHALImpl {
             BatteryHealthMode::Station => (60u8, mask::BATTERY_MODE_STATION),
         };
 
-        let down_limit = if limit_up > 5 { limit_up - 5 } else { limit_up };
+        let (limit_up, down_limit) = crate::machine::battery_charge_window(limit_up);
 
         // 1. Write cutoff limits (Upper, Lower)
         let ok1 = wmi_ec::wmi_write_ec(ec::ADDR_BATTERY_LIMIT_UP, limit_up);

@@ -367,6 +367,8 @@ function powerSettings() {
     sleep_deep_sleep: !!cfg.sleep_deep_sleep,
     sleep_hibernate_30m: !!cfg.sleep_hibernate_30m,
     sleep_auto_office: !!cfg.sleep_auto_office,
+    ec_charge_stop: cfg.battery_mode === 'station' ? 60 : cfg.battery_mode === 'balance' ? 80 : 100,
+    ec_charge_resume: cfg.battery_mode === 'station' ? 40 : cfg.battery_mode === 'balance' ? 70 : 95,
   };
 }
 
@@ -558,6 +560,11 @@ const handlers: Record<string, Handler> = {
       gpu_duty_pct: row(m.gpu, 'duty'),
     };
   },
+  get_fan_apply_status: () => ({
+    state: state.fanBoost ? 'fan_boost' : 'applied',
+    source: state.powerMode === 4 ? '自定义曲线' : `${['', '办公', '均衡', '狂暴'][state.powerMode]} · ${fanPolicy === 'official' ? '官方原厂' : '分模式调校'}`,
+    ec: (handlers as any).read_ec_fan_table(),
+  }),
   get_shortcuts_enabled: () => shortcutsEnabled,
   set_shortcuts_enabled: (a) => {
     shortcutsEnabled = !!a?.enabled;

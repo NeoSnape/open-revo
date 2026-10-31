@@ -23,6 +23,10 @@ interface PowerSettingsInfo {
   sleep_deep_sleep: boolean;
   sleep_hibernate_30m: boolean;
   sleep_auto_office: boolean;
+
+  // Raw EC readback of the charge window
+  ec_charge_stop?: number | null;
+  ec_charge_resume?: number | null;
 }
 
 export const PowerTuningView: React.FC = () => {
@@ -72,6 +76,10 @@ export const PowerTuningView: React.FC = () => {
     try {
       const res = await invoke<PowerSettingsInfo>('set_battery_mode', { mode });
       if (res) setPowerInfo(res);
+      // The EC write runs on a background thread: re-read once it has landed.
+      setTimeout(() => {
+        invoke<PowerSettingsInfo>('get_power_settings').then((r) => r && setPowerInfo(r)).catch(() => {});
+      }, 1200);
     } catch (e) {
       console.error('Failed to set battery mode:', e);
     } finally {
@@ -508,8 +516,10 @@ export const PowerTuningView: React.FC = () => {
           <div style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>
             电池健康
           </div>
-          <div style={{ fontSize: '9.5px', color: 'var(--text-dim)' }}>
-            主板硬件级充电控制 · 电池健康长寿模式
+          <div className="battery-ec-readback">
+            {powerInfo.ec_charge_stop != null && powerInfo.ec_charge_resume != null
+              ? `EC 实际：充到 ${powerInfo.ec_charge_stop}% 停止 · 低于 ${powerInfo.ec_charge_resume}% 复充`
+              : '主板硬件级充电控制'}
           </div>
         </div>
 
@@ -527,9 +537,7 @@ export const PowerTuningView: React.FC = () => {
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <span style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--text-primary)' }}>长效模式</span>
-                  {powerInfo.battery_hardware_limit_enabled && (
-                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--status-ok)' }}>(100%)</span>
-                  )}
+                  <span className="battery-mode-window">100%</span>
                 </div>
                 <div style={{ fontSize: '9.5px', color: 'var(--text-dim)', lineHeight: '1.35', marginTop: '1px' }}>
                   适合很长时间使用电池工作的环境。
@@ -548,9 +556,7 @@ export const PowerTuningView: React.FC = () => {
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <span style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--text-primary)' }}>平衡模式</span>
-                  {powerInfo.battery_hardware_limit_enabled && (
-                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--status-ok)' }}>(80%)</span>
-                  )}
+                  <span className="battery-mode-window">70% ~ 80%</span>
                 </div>
                 <div style={{ fontSize: '9.5px', color: 'var(--text-dim)', lineHeight: '1.35', marginTop: '1px' }}>
                   偶而会携带电脑工作，且不需要多余靠电池供电。
@@ -569,12 +575,10 @@ export const PowerTuningView: React.FC = () => {
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <span style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--text-primary)' }}>工作站模式</span>
-                  {powerInfo.battery_hardware_limit_enabled && (
-                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--status-ok)' }}>(60%)</span>
-                  )}
+                  <span className="battery-mode-window">40% ~ 60%</span>
                 </div>
                 <div style={{ fontSize: '9.5px', color: 'var(--text-dim)', lineHeight: '1.35', marginTop: '1px' }}>
-                  如果很容易接续适配器工作，无携带电脑外出工作的需求，强烈建议使用此模式，延长电池的寿命。
+                  长期插电使用时推荐。充到 60% 停充，低于 40% 才重新充电。插着电不会主动放电：当前电量高于 60% 时，需要拔电用到 60% 以下才进入区间。
                 </div>
               </div>
             </div>

@@ -391,7 +391,7 @@ impl EcBridge {
                 wmi_ec::BATTERY_MODE_BALANCE
             };
 
-            let down_limit = if limit > 5 { limit - 5 } else { limit };
+            let (limit, down_limit) = crate::machine::battery_charge_window(limit);
 
             // 0. Platform4 Gate method (for legacy gaming chassis without manifest):
             //    Only apply platform spoofing on non-declarative gaming platforms
