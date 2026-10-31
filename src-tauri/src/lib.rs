@@ -94,6 +94,8 @@ pub fn run() {
     let gpu_for_telemetry = Arc::clone(&gpu_instance);
     let ec_for_status = Arc::clone(&ec_instance);
     let gpu_for_status = Arc::clone(&gpu_instance);
+    let ec_for_rtss = Arc::clone(&ec_instance);
+    let gpu_for_rtss = Arc::clone(&gpu_instance);
 
     let autostart_plugin = tauri_plugin_autostart::init(
         tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -263,6 +265,8 @@ pub fn run() {
             commands::fan_cmd::get_fan_apply_status,
             commands::shortcut_cmd::get_registered_shortcuts,
             commands::shortcut_cmd::get_shortcuts_enabled,
+            commands::shortcut_cmd::get_rtss_osd_enabled,
+            commands::shortcut_cmd::set_rtss_osd_enabled,
             commands::shortcut_cmd::set_shortcuts_enabled,
             commands::shortcut_cmd::register_custom_shortcut,
             commands::shortcut_cmd::unregister_custom_shortcut,
@@ -330,6 +334,7 @@ pub fn run() {
             app.manage(crate::system::tray::TrayKeeper(tray));
 
             crate::system::telemetry::start_status_logger(ec_for_status, gpu_for_status);
+            crate::system::rtss_osd::start(ec_for_rtss, gpu_for_rtss);
 
             // Step 6.11: Start adaptive dynamic telemetry heartbeat broadcaster
             crate::system::boot_trace::boot_scope("Step 6.11: Telemetry Heartbeat", || {
@@ -358,6 +363,7 @@ pub fn run() {
                 println!("[OpenRevo] Process exiting. Executing clean webview shutdown and hardware safety shutdown...");
                 crate::system::webview_orchestrator::WebviewOrchestrator::global().safe_shutdown_all_subviews();
                 crate::system::tray::safe_hardware_shutdown_on_exit();
+                crate::system::rtss_osd::release_now();
             }
         });
 }

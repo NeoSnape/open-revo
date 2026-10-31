@@ -214,6 +214,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub shortcuts_enabled: bool,
 
+    /// Feed OpenRevo sensors into the RTSS in-game OSD (needs RivaTuner Statistics Server running).
+    #[serde(default = "default_true")]
+    pub rtss_osd_enabled: bool,
+
     // Builtin & Extension Module Toggles (Persisted in config.json)
     // Allows safe-mode isolation and fine-grained user control of tabs/plugins
     #[serde(default = "default_module_toggles")]
@@ -483,6 +487,7 @@ impl Default for AppConfig {
             active_profile_id: default_active_profile_id(),
             preset_fan_policy: default_preset_fan_policy(),
             shortcuts_enabled: false,
+            rtss_osd_enabled: true,
             launch_visible: false,
             gpu_offset_step: default_gpu_offset_step(),
             gpu_core_offset_max: default_gpu_core_offset_max(),

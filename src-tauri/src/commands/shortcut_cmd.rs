@@ -63,3 +63,19 @@ pub fn set_shortcuts_enabled(enabled: bool) -> bool {
     crate::system::shortcuts::set_enabled(enabled);
     enabled
 }
+
+#[tauri::command]
+pub fn get_rtss_osd_enabled() -> bool {
+    crate::system::config::load_config().rtss_osd_enabled
+}
+
+#[tauri::command]
+pub fn set_rtss_osd_enabled(enabled: bool) -> bool {
+    let mut cfg = crate::system::config::load_config();
+    cfg.rtss_osd_enabled = enabled;
+    crate::system::config::save_config(&cfg);
+    if !enabled {
+        crate::system::rtss_osd::release_now();
+    }
+    enabled
+}

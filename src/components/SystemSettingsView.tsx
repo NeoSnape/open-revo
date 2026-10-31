@@ -259,6 +259,21 @@ export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
   useEffect(() => {
     invoke<boolean>('get_shortcuts_enabled').then(setShortcutsEnabled).catch(() => {});
   }, []);
+  // RTSS in-game OSD feed
+  const [rtssEnabled, setRtssEnabled] = useState(true);
+  useEffect(() => {
+    invoke<boolean>('get_rtss_osd_enabled').then(setRtssEnabled).catch(() => {});
+  }, []);
+  const handleToggleRtss = async (enabled: boolean) => {
+    setRtssEnabled(enabled);
+    try {
+      setRtssEnabled(await invoke<boolean>('set_rtss_osd_enabled', { enabled }));
+    } catch (e) {
+      console.error('Failed to toggle RTSS OSD:', e);
+      setRtssEnabled(!enabled);
+    }
+  };
+
   const handleToggleShortcuts = async (enabled: boolean) => {
     setShortcutsEnabled(enabled);
     try {
@@ -566,6 +581,20 @@ export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
                 <span>清除数据</span>
               </button>
             </div>
+          </div>
+
+          {/* RTSS 游戏内 OSD */}
+          <div className="quick-row">
+            <div>
+              <div className="sys-row-label">
+                <span>游戏内 OSD (RTSS)</span>
+                <RevBadge variant={rtssEnabled ? 'success' : 'default'}>{rtssEnabled ? '已启用' : '已关闭'}</RevBadge>
+              </div>
+              <div className="sys-row-desc">
+                游戏运行时把模式、帧率、CPU/GPU 温度功耗频率、显存与风扇转速送给 RivaTuner 显示在左上角；需要 RTSS 在后台运行，不需要 Afterburner
+              </div>
+            </div>
+            <RevSwitch checked={rtssEnabled} onChange={handleToggleRtss} />
           </div>
 
           {/* 全局快捷键 */}

@@ -24,3 +24,4 @@ pub mod telemetry;
 pub mod webview_orchestrator;
 pub mod takeover;
 pub mod shortcuts;
+pub mod rtss_osd;

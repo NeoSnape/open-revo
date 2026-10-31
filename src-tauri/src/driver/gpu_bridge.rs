@@ -15,6 +15,14 @@ static HAS_NVIDIA_DGPU: AtomicI8 = AtomicI8::new(-1);
 /// Probes whether this laptop physically contains an NVIDIA discrete GPU via fast Win32 registry (<0.2ms).
 /// On thin-and-light laptops (e.g. Mechrevo Wujie / Code series) or pure iGPU laptops, returns false.
 /// Completely prevents any execution of 'nvidia-smi' to avoid 2.5s timeouts, hangs, and battery drain.
+
+static GPU_DEMAND_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn monotonic_ms() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+}
+
 pub fn is_nvidia_dgpu_available() -> bool {
     let cached = HAS_NVIDIA_DGPU.load(Ordering::Relaxed);
     if cached != -1 {
@@ -679,6 +687,17 @@ impl GpuBridge {
         bridge
     }
 
+    /// Poll only while someone needs live GPU data (open window, RTSS overlay, status log).
+    /// Upstream spawned nvidia-smi every 1.5 s forever, even with the window closed.
+    pub fn request_telemetry(for_ms: u64) {
+        let until = monotonic_ms() + for_ms;
+        GPU_DEMAND_UNTIL.fetch_max(until, Ordering::SeqCst);
+    }
+
+    fn demand_active() -> bool {
+        monotonic_ms() < GPU_DEMAND_UNTIL.load(Ordering::SeqCst)
+    }
+
     fn start_background_poller(&self) {
         let inner = Arc::clone(&self.inner);
         let gpu_name = Arc::clone(&self.gpu_name);
@@ -705,8 +724,26 @@ impl GpuBridge {
             let mut consecutive_failures: u32 = 0;
             loop {
                 // 自适应休眠避让：若连续查询失败或独显休眠，自适应拉长休眠时间至 4000ms，避免冲击 D3Cold 驱动
-                let sleep_ms = if consecutive_failures > 1 { 4000 } else { 1500 };
+                let sleep_ms = if consecutive_failures > 1 { 4000 } else { 1000 };
                 thread::sleep(Duration::from_millis(sleep_ms));
+
+                if !GpuBridge::demand_active() {
+                    continue;
+                }
+
+                if let Some(s) = crate::driver::nvml::sample() {
+                    consecutive_failures = 0;
+                    inner.temp.store(s.temp_c, Ordering::SeqCst);
+                    inner.usage.store(s.usage_pct, Ordering::SeqCst);
+                    inner.core_freq.store(s.core_mhz, Ordering::SeqCst);
+                    inner.mem_freq.store(s.mem_mhz, Ordering::SeqCst);
+                    if s.vram_total_mb > 0 {
+                        inner.vram_mb.store(s.vram_total_mb, Ordering::SeqCst);
+                    }
+                    inner.vram_used_mb.store(s.vram_used_mb, Ordering::SeqCst);
+                    inner.power_dw.store((s.power_w * 10.0).round() as u32, Ordering::SeqCst);
+                    continue;
+                }
 
                 // Execute nvidia-smi with CREATE_NO_WINDOW for real-time telemetry
                 let output = Command::new("nvidia-smi")

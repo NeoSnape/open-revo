@@ -529,6 +529,7 @@ function removeListener(event: string, eventId: number) {
 // Mirrors src-tauri/src/machine.rs curves (temp °C, duty %).
 let fanPolicy: 'tuned' | 'official' = 'tuned';
 let shortcutsEnabled = false;
+let rtssEnabled = true;
 const C = (arr: [number, number][]) => arr.map(([temp, duty]) => ({ temp, duty }));
 const FAN_CURVES: Record<string, { cpu: any[]; gpu: any[] }> = {
   official: { cpu: C([[48,30],[52,35],[56,40],[60,50],[64,55],[68,60],[72,70],[76,80],[80,90],[85,100]]), gpu: C([[46,30],[50,35],[54,40],[58,50],[62,55],[66,60],[70,70],[74,80],[78,90],[81,100]]) },
@@ -565,6 +566,11 @@ const handlers: Record<string, Handler> = {
     source: state.powerMode === 4 ? '自定义曲线' : `${['', '办公', '均衡', '狂暴'][state.powerMode]} · ${fanPolicy === 'official' ? '官方原厂' : '分模式调校'}`,
     ec: (handlers as any).read_ec_fan_table(),
   }),
+  get_rtss_osd_enabled: () => rtssEnabled,
+  set_rtss_osd_enabled: (a) => {
+    rtssEnabled = !!a?.enabled;
+    return rtssEnabled;
+  },
   get_shortcuts_enabled: () => shortcutsEnabled,
   set_shortcuts_enabled: (a) => {
     shortcutsEnabled = !!a?.enabled;

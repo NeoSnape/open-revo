@@ -191,6 +191,10 @@ pub fn start_status_logger(
             let cfg = crate::system::config::load_config();
             // Only query NVAPI when the dGPU is always on anyway (MUX direct); never wake it in hybrid.
             let query_gpu = cfg.gpu_mode == "dgpu";
+            if query_gpu {
+                crate::driver::gpu_bridge::GpuBridge::request_telemetry(5000);
+                std::thread::sleep(Duration::from_millis(2500));
+            }
             let s = collect_hardware_state(&ec_bridge, &gpu_bridge, query_gpu);
             let (bat, _, charging) = crate::commands::power_cmd::get_live_power_status();
             let stop = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_BATTERY_LIMIT_UP).unwrap_or(0);

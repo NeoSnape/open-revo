@@ -9,6 +9,7 @@ pub mod wmi_ec;
 pub mod wmi_event_listener;
 pub mod custom_fx_engine;
 pub mod nvapi;
+pub mod nvml;
 pub mod hid_ffi;
 pub mod wmi_mulong;
 pub mod bld_driver_mgr;

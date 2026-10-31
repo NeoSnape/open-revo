@@ -116,6 +116,7 @@ pub fn collect_hardware_state(
             // Declarative Decision Center Authority: strictly pure iGPU / thin & light laptop, no dGPU
             (0, 0, 0, 0, 0, 0, 0.0, "".to_string(), false)
         } else if query_gpu {
+            crate::driver::gpu_bridge::GpuBridge::request_telemetry(5000);
             let gpu = gpu_state.lock();
             let count = gpu.get_gpu_count();
             let name = gpu.get_name(0);
