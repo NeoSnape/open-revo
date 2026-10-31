@@ -178,27 +178,62 @@ fn mode_label(mode: u8, boost: bool) -> String {
     if boost { format!("{} +BOOST", m) } else { m.to_string() }
 }
 
+/// CPU PL1/PL2 the current mode runs with (presets = EC factory table, custom = profile).
+fn cpu_limits(mode: u8) -> (u16, u16) {
+    match mode {
+        1 => (45, 45),
+        3 => (175, 175),
+        4 => {
+            let p = crate::system::config::load_config().custom_profile;
+            (p.cpu_pl1_watts, p.cpu_pl2_watts)
+        }
+        _ => (75, 85),
+    }
+}
+
+/// (used GB, total GB) of physical RAM.
+fn ram_gb() -> (f32, f32) {
+    use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut m = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
+    if unsafe { GlobalMemoryStatusEx(&mut m) }.is_ok() {
+        let gb = 1024.0 * 1024.0 * 1024.0;
+        ((m.ullTotalPhys - m.ullAvailPhys) as f32 / gb, m.ullTotalPhys as f32 / gb)
+    } else {
+        (0.0, 0.0)
+    }
+}
+
 fn build_text(ec: &crate::driver::ec_bridge::SharedEcBridge, gpu: &crate::driver::gpu_bridge::SharedGpuBridge) -> String {
     let (mode, boost, cpu_rpm, gpu_rpm) = {
         let e = ec.lock();
         (e.get_power_mode(), e.is_fan_boost(), e.get_cpu_fan_rpm(), e.get_gpu_fan_rpm())
     };
     let cpu = crate::commands::system_cmd::get_cpu_monitor();
-    let (g_temp, g_pow, g_clk, g_use, v_used, v_tot) = {
+    let (g_temp, g_pow, g_clk, g_mem, g_use, v_used, v_tot) = {
         let g = gpu.lock();
-        (g.get_temp(0), g.get_power_w(0), g.get_core_freq(0), g.get_usage(0), g.get_vram_used_mb(0), g.get_vram_mb(0))
+        (g.get_temp(0), g.get_power_w(0), g.get_core_freq(0), g.get_mem_freq(0), g.get_usage(0), g.get_vram_used_mb(0), g.get_vram_mb(0))
     };
+    let nv = crate::driver::nvml::last_sample().unwrap_or_default();
+    let (pl1, pl2) = cpu_limits(mode);
+    let (ram_used, ram_total) = ram_gb();
     let (bat, _, _) = crate::commands::power_cmd::get_live_power_status();
     let on_ac = crate::commands::hardware_cmd::is_dc_round_plugged_in();
 
-    // RTSS hypertext: <P=x,y> position, <Cn=RRGGBB> colour defs, <Sn=pct> size defs, <FR>/<FT> framerate/frametime.
-    let mut t = String::with_capacity(512);
-    t.push_str("<P=0,0><C0=F59E0B><C1=8AB4F8><C2=76B900><C3=A3A3A3><C4=FFFFFF><S0=60>");
-    t.push_str(&format!("<C0>{}<C>  <C4><FR><C><S0> FPS<S>  <C4><FT><C><S0> ms<S>", mode_label(mode, boost)));
-    if !on_ac {
-        t.push_str(&format!("  <C3>BAT {}%<C>", bat));
-    }
-    t.push('\n');
+    // RTSS hypertext: <P=x,y> position, <Cn=RRGGBB> colour defs, <Sn=pct> size defs,
+    // <FR>/<FT>/<FRAVG>/<FR10L>/<FR01L> framerate stats, <API>/<RES> render info.
+    let mut t = String::with_capacity(1024);
+    t.push_str("<P=0,0><C0=F59E0B><C1=8AB4F8><C2=76B900><C3=A3A3A3><C4=FFFFFF><C5=F87171><S0=60>");
+
+    // 1. mode + limits + render info
+    t.push_str(&format!(
+        "<C0>{}<C>  <C3>PL<C> {}/{}<S0>W<S>  <C3><API>  <RES><C>\n",
+        mode_label(mode, boost), pl1, pl2
+    ));
+    // 2. framerate
+    t.push_str(
+        "<C4><FR><C><S0> FPS<S>  <C4><FT><C><S0> ms<S>  <C3>AVG<C> <FRAVG>  <C3>1%<C> <FR10L>  <C3>0.1%<C> <FR01L>\n",
+    );
+    // 3. CPU
     t.push_str(&format!(
         "<C1>CPU<C>  {}<S0>C<S>  {:.0}<S0>W<S>  {}<S0>MHz<S>  {}<S0>%<S>\n",
         cpu.get_temp(),
@@ -206,16 +241,32 @@ fn build_text(ec: &crate::driver::ec_bridge::SharedEcBridge, gpu: &crate::driver
         cpu.get_current_mhz(),
         cpu.get_usage()
     ));
+    // 4. GPU (power / enforced limit, core / memory clock, what is limiting it)
+    let limit = if nv.power_limit_w > 0.0 { format!("/{:.0}", nv.power_limit_w) } else { String::new() };
+    let why = crate::driver::nvml::throttle_label(nv.throttle_reasons);
     t.push_str(&format!(
-        "<C2>GPU<C>  {}<S0>C<S>  {:.0}<S0>W<S>  {}<S0>MHz<S>  {}<S0>%<S>  {:.1}<S0>/{:.0}G<S>\n",
+        "<C2>GPU<C>  {}<S0>C<S>  {:.0}{}<S0>W<S>  {}<S0>MHz<S>  {}<S0>MHz mem<S>  {}<S0>%<S>{}\n",
         g_temp,
         g_pow,
+        limit,
         g_clk,
+        g_mem,
         g_use,
-        v_used as f32 / 1024.0,
-        v_tot as f32 / 1024.0
+        if why.is_empty() { String::new() } else { format!("  <C5>{}<C>", why) }
     ));
-    t.push_str(&format!("<C3>FAN<C>  {} / {}<S0> rpm<S>", cpu_rpm, gpu_rpm));
+    // 5. memory + fans (+ battery when unplugged)
+    t.push_str(&format!(
+        "<C3>VRAM<C> {:.1}/{:.0}<S0>G<S>  <C3>RAM<C> {:.1}/{:.0}<S0>G<S>  <C3>FAN<C> {}/{}<S0> rpm<S>",
+        v_used as f32 / 1024.0,
+        v_tot as f32 / 1024.0,
+        ram_used,
+        ram_total,
+        cpu_rpm,
+        gpu_rpm
+    ));
+    if !on_ac {
+        t.push_str(&format!("  <C5>BAT {}%<C>", bat));
+    }
     t
 }
 
