@@ -82,11 +82,9 @@ pub fn start_hardware_state_watcher(
                 continue;
             }
 
-            let loop_delay = if is_ultrabook {
-                std::time::Duration::from_millis(500)
-            } else {
-                std::time::Duration::from_millis(50)
-            };
+            // Each EC byte read busy-waits on the EC in the driver; at 50 ms (2 reads per tick) this
+            // thread alone cost ~3% of a core while idle. 250 ms is still instant for Win/Fn lock feedback.
+            let loop_delay = std::time::Duration::from_millis(250);
             std::thread::sleep(loop_delay);
 
             // Fast Track: Watch Win Key Lock & Fn Lock for instantaneous, responsive keyboard hotkey reaction
@@ -193,71 +191,75 @@ pub fn start_hardware_state_watcher(
 
             // Slow Track: Heavy peripherals (Bluetooth, Wi-Fi, Camera, Mic, AC/DC)
             tick_count = tick_count.wrapping_add(1);
-            let slow_mod = if is_ultrabook { 2 } else { 12 };
+            let slow_mod = 2; // ~500 ms
             if tick_count % slow_mod != 0 {
                 continue;
             }
 
-            // 1. Watch Bluetooth
-            if let Some(current_bt) = super::radio::get_native_bluetooth_radio_state() {
-                if last_bt != Some(current_bt) {
-                    crate::log_info!("DEVICE_SWITCH", "External Bluetooth state change: {:?} -> {}", last_bt, current_bt);
-                    last_bt = Some(current_bt);
-                    let mut cfg = crate::system::config::load_config();
-                    cfg.bluetooth_enabled = current_bt;
-                    crate::system::config::save_config(&cfg);
-                    use tauri::Emitter;
-                    crate::system::osd_window::wake_osd_if_enabled(&app);
-                    let _ = app.emit("bluetooth-state-changed", current_bt);
-                    let _ = app.emit_to("main", "bluetooth-state-changed", current_bt);
-                    let _ = app.emit_to("osd", "bluetooth-state-changed", current_bt);
+            // Peripheral states only mirror the UI toggles. Every 5 s, not every slow tick: the camera
+            // probe spawns pnputil.exe and the Bluetooth probe walks WinRT radios, ~2.5% of a core at 0.5 s.
+            if tick_count % 20 == 0 {
+                // 1. Watch Bluetooth
+                if let Some(current_bt) = super::radio::get_native_bluetooth_radio_state() {
+                    if last_bt != Some(current_bt) {
+                        crate::log_info!("DEVICE_SWITCH", "External Bluetooth state change: {:?} -> {}", last_bt, current_bt);
+                        last_bt = Some(current_bt);
+                        let mut cfg = crate::system::config::load_config();
+                        cfg.bluetooth_enabled = current_bt;
+                        crate::system::config::save_config(&cfg);
+                        use tauri::Emitter;
+                        crate::system::osd_window::wake_osd_if_enabled(&app);
+                        let _ = app.emit("bluetooth-state-changed", current_bt);
+                        let _ = app.emit_to("main", "bluetooth-state-changed", current_bt);
+                        let _ = app.emit_to("osd", "bluetooth-state-changed", current_bt);
+                    }
                 }
-            }
 
-            // 2. Watch Wi-Fi
-            if let Some(current_wifi) = super::radio::get_realtime_wifi_state() {
-                if last_wifi != Some(current_wifi) {
-                    crate::log_info!("DEVICE_SWITCH", "External Wi-Fi state change: {:?} -> {}", last_wifi, current_wifi);
-                    last_wifi = Some(current_wifi);
-                    let mut cfg = crate::system::config::load_config();
-                    cfg.wifi_enabled = current_wifi;
-                    crate::system::config::save_config(&cfg);
-                    use tauri::Emitter;
-                    crate::system::osd_window::wake_osd_if_enabled(&app);
-                    let _ = app.emit("wifi-state-changed", current_wifi);
-                    let _ = app.emit_to("main", "wifi-state-changed", current_wifi);
-                    let _ = app.emit_to("osd", "wifi-state-changed", current_wifi);
+                // 2. Watch Wi-Fi
+                if let Some(current_wifi) = super::radio::get_realtime_wifi_state() {
+                    if last_wifi != Some(current_wifi) {
+                        crate::log_info!("DEVICE_SWITCH", "External Wi-Fi state change: {:?} -> {}", last_wifi, current_wifi);
+                        last_wifi = Some(current_wifi);
+                        let mut cfg = crate::system::config::load_config();
+                        cfg.wifi_enabled = current_wifi;
+                        crate::system::config::save_config(&cfg);
+                        use tauri::Emitter;
+                        crate::system::osd_window::wake_osd_if_enabled(&app);
+                        let _ = app.emit("wifi-state-changed", current_wifi);
+                        let _ = app.emit_to("main", "wifi-state-changed", current_wifi);
+                        let _ = app.emit_to("osd", "wifi-state-changed", current_wifi);
+                    }
                 }
-            }
 
-            // 3. Watch Camera
-            let current_cam = super::camera::get_realtime_camera_state(has_ec_switches, true);
-            if last_cam != Some(current_cam) {
-                crate::log_info!("DEVICE_SWITCH", "External Camera state change: {:?} -> {}", last_cam, current_cam);
-                last_cam = Some(current_cam);
-                let mut cfg = crate::system::config::load_config();
-                cfg.camera_enabled = current_cam;
-                crate::system::config::save_config(&cfg);
-                use tauri::Emitter;
-                crate::system::osd_window::wake_osd_if_enabled(&app);
-                let _ = app.emit("camera-state-changed", current_cam);
-                let _ = app.emit_to("main", "camera-state-changed", current_cam);
-                let _ = app.emit_to("osd", "camera-state-changed", current_cam);
-            }
-
-            // 4. Watch Microphone Mute State
-            if let Some(current_mic) = super::audio::get_microphone_state() {
-                if last_mic != Some(current_mic) {
-                    crate::log_info!("DEVICE_SWITCH", "External Microphone state change: {:?} -> {}", last_mic, current_mic);
-                    last_mic = Some(current_mic);
+                // 3. Watch Camera
+                let current_cam = super::camera::get_realtime_camera_state(has_ec_switches, true);
+                if last_cam != Some(current_cam) {
+                    crate::log_info!("DEVICE_SWITCH", "External Camera state change: {:?} -> {}", last_cam, current_cam);
+                    last_cam = Some(current_cam);
                     let mut cfg = crate::system::config::load_config();
-                    cfg.mic_enabled = current_mic;
+                    cfg.camera_enabled = current_cam;
                     crate::system::config::save_config(&cfg);
                     use tauri::Emitter;
                     crate::system::osd_window::wake_osd_if_enabled(&app);
-                    let _ = app.emit("mic-state-changed", current_mic);
-                    let _ = app.emit_to("main", "mic-state-changed", current_mic);
-                    let _ = app.emit_to("osd", "mic-state-changed", current_mic);
+                    let _ = app.emit("camera-state-changed", current_cam);
+                    let _ = app.emit_to("main", "camera-state-changed", current_cam);
+                    let _ = app.emit_to("osd", "camera-state-changed", current_cam);
+                }
+
+                // 4. Watch Microphone Mute State
+                if let Some(current_mic) = super::audio::get_microphone_state() {
+                    if last_mic != Some(current_mic) {
+                        crate::log_info!("DEVICE_SWITCH", "External Microphone state change: {:?} -> {}", last_mic, current_mic);
+                        last_mic = Some(current_mic);
+                        let mut cfg = crate::system::config::load_config();
+                        cfg.mic_enabled = current_mic;
+                        crate::system::config::save_config(&cfg);
+                        use tauri::Emitter;
+                        crate::system::osd_window::wake_osd_if_enabled(&app);
+                        let _ = app.emit("mic-state-changed", current_mic);
+                        let _ = app.emit_to("main", "mic-state-changed", current_mic);
+                        let _ = app.emit_to("osd", "mic-state-changed", current_mic);
+                    }
                 }
             }
 
@@ -530,7 +532,7 @@ pub fn start_hardware_state_watcher(
                     } else {
                         last_was_throttled = false;
                         if custom_trace_ticks % 8 == 0 {
-                            // Periodic live status every ~5 seconds
+                            // Periodic live status every ~4 seconds
                             let raw_pl1 = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_PL1).unwrap_or(0);
                             let raw_pl2 = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_PL2).unwrap_or(0);
                             let raw_pl4 = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_PL4).unwrap_or(0);
@@ -550,8 +552,8 @@ pub fn start_hardware_state_watcher(
                 last_was_throttled = false;
             }
 
-            // 9. Watch Windows Color Management / Active ICM Profile Changes (every ~1.2s)
-            if tick_count % 24 == 0 {
+            // 9. Watch Windows Color Management / Active ICM Profile Changes (every ~1s)
+            if tick_count % 4 == 0 {
                 let monitors = crate::system::display::get_all_monitors();
                 let cfg = crate::system::color_calibration::load_calibration_config();
                 let mut changed = false;
