@@ -1225,6 +1225,7 @@ const handlers: Record<string, Handler> = {
 
   // -- Boot / telemetry ----------------------------------------------------
   frontend_ready: () => Date.now(),
+  ui_pong: () => null,
   get_boot_log: () => '[mock] dev browser boot trace\n',
   report_window_visibility: () => null,
   get_telemetry_heartbeat_status: () => ({

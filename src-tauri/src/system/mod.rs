@@ -26,3 +26,4 @@ pub mod takeover;
 pub mod shortcuts;
 pub mod rtss_osd;
 pub mod rtss_frametime;
+pub mod webview_health;

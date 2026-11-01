@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock};
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
-    tray::{MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent},
+    tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter,
 };
 
@@ -291,10 +291,11 @@ pub fn handle_tray_menu_event(
 
 /// Handles tray icon mouse events (left click and double click to restore window).
 pub fn handle_tray_icon_event(tray: &TrayIcon, event: TrayIconEvent) {
-    crate::log_info!("TRAY", "TrayIconEvent: {:?}", event);
     match event {
+        // One click delivers Down and Up; act once, on release.
         TrayIconEvent::Click {
             button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
             ..
         }
         | TrayIconEvent::DoubleClick {
@@ -305,16 +306,17 @@ pub fn handle_tray_icon_event(tray: &TrayIcon, event: TrayIconEvent) {
             if let Some(window) = crate::system::window::ensure_window_alive(app) {
                 crate::log_info!(
                     "TRAY",
-                    "Left click triggered. Current state: is_visible={:?}, is_minimized={:?}",
+                    "Left click: is_visible={:?}, is_minimized={:?}",
                     window.is_visible(),
                     window.is_minimized()
                 );
-                crate::system::window::restore_and_sync_window(&window);
+                crate::system::webview_health::show_main_checked(app);
             } else {
                 crate::log_error!("TRAY", "CRITICAL: Unable to obtain or resurrect 'main' WebviewWindow on tray click!");
             }
         }
-        _ => {}
+        // Enter / Move / Leave fire on every mouse movement over the icon.
+        _ => crate::log_debug!("TRAY", "TrayIconEvent: {:?}", event),
     }
 }
 

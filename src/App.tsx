@@ -286,6 +286,14 @@ export default function App() {
     };
     bootSync();
 
+    // Liveness ping from the tray click; no answer means the WebView died and the backend relaunches.
+    let unlistenPing: (() => void) | undefined;
+    listen<number>('ui-ping', (event) => {
+      invoke('ui_pong', { seq: event.payload }).catch(() => {});
+    }).then((un) => {
+      unlistenPing = un;
+    });
+
     // Responsive hardware state event bus subscription (zero polling overhead)
     let unlistenTelemetry: (() => void) | undefined;
     listen<HardwareState>('hardware-state-updated', (event) => {
@@ -452,6 +460,7 @@ export default function App() {
 
     return () => {
       clearInterval(timer);
+      if (unlistenPing) unlistenPing();
       if (unlistenTelemetry) unlistenTelemetry();
       if (unlistenReset) unlistenReset();
       if (unlistenSyncMode) unlistenSyncMode();

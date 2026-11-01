@@ -21,6 +21,9 @@ pub use crate::system::tray::{
 pub use crate::system::window::{ensure_window_alive, restore_and_sync_window};
 
 pub fn run() {
+    // A self-relaunched instance (dead WebView recovery) waits for its predecessor to exit first.
+    crate::system::webview_health::wait_for_previous_instance();
+
     // 0. Disable WebView2 background throttling & renderer suspension for HUD overlay and widgets
     #[cfg(windows)]
     {
@@ -242,6 +245,7 @@ pub fn run() {
             crate::system::osd_window::hide_osd_window,
             crate::system::boot_trace::get_boot_log,
             crate::system::boot_trace::frontend_ready,
+            crate::system::webview_health::ui_pong,
             commands::hardware_cmd::get_display_tuning_state,
             commands::hardware_cmd::set_display_tuning_enabled,
             commands::hardware_cmd::apply_display_color_preset,
