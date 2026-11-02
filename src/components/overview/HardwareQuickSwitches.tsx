@@ -323,7 +323,7 @@ export const HardwareQuickSwitches: React.FC<HardwareQuickSwitchesProps> = ({
           <div className="oem-switch-title">防休眠</div>
         </div>
 
-        {/* 10. 关闭屏幕 (3秒防外设误触唤醒) */}
+        {/* 10. 关闭屏幕（黑屏不待机，按键恢复） */}
         <div
           onClick={async () => {
             try {
@@ -332,7 +332,7 @@ export const HardwareQuickSwitches: React.FC<HardwareQuickSwitchesProps> = ({
               console.error('Failed to turn off screen:', e);
             }
           }}
-          title="关闭屏幕：立即关闭显示器背光（3秒防外设误触，配合防休眠整夜挂机下载不刺眼）"
+          title="关闭屏幕：黑屏并把背光降到 0，系统不待机、下载/渲染继续；鼠标不会唤醒，按任意键恢复"
           className="oem-switch-card cursor-pointer"
         >
           <div className="oem-bracket-tl" />

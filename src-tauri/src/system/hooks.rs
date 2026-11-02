@@ -54,6 +54,11 @@ unsafe extern "system" fn low_level_keyboard_proc(
         let kbd_struct = *(l_param.0 as *const KBDLLHOOKSTRUCT);
         let vk = kbd_struct.vkCode as u16;
 
+        // Screen blanked: the first key restores it and never reaches the app underneath.
+        if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && crate::system::screen_blank::on_key_down() {
+            return LRESULT(1);
+        }
+
         // Bypass dummy mask key (0xE8) from interfering with interactive lighting or lock logic
         if vk == 0xE8 {
             return CallNextHookEx(None, n_code, w_param, l_param);

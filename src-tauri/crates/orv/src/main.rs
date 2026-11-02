@@ -17,7 +17,7 @@ const HELP: &str = "orv - OpenRevo 命令行
   orv gpu [hybrid|dgpu|igpu --yes [--reboot]]   显卡模式（需重启）
   orv hz <刷新率>                   如 orv hz 60 / orv hz 300
   orv awake on|off                  防休眠
-  orv screen off                    仅关闭屏幕（系统继续运行）
+  orv screen off|on                 黑屏不待机（系统继续运行；按任意键恢复，鼠标不会唤醒）
   orv osd on|off                    游戏内 RTSS OSD
   orv light on|off|<亮度>           键盘灯
   orv lock win|fn on|off            Win 键锁 / Fn 锁
@@ -382,11 +382,17 @@ fn main() {
             println!("防休眠 {}", if on { "开" } else { "关" });
         }
         Some("screen") => {
-            if p(1).map(|s| s.as_str()) != Some("off") {
-                die("用法: orv screen off", 2);
+            match p(1).map(|s| s.as_str()) {
+                Some("off") => {
+                    call("screen_off", json!({}));
+                    println!("屏幕已关闭，系统继续运行（按任意键恢复，鼠标不会唤醒）");
+                }
+                Some("on") => {
+                    call("screen_on", json!({}));
+                    println!("屏幕已恢复");
+                }
+                _ => die("用法: orv screen off|on", 2),
             }
-            call("screen_off", json!({}));
-            println!("屏幕即将关闭（动鼠标或按键即可唤醒）");
         }
         Some("osd") => {
             let on = on_off(p(1));

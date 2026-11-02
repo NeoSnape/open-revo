@@ -233,6 +233,10 @@ fn dispatch(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, String> {
             display_cmd::turn_off_screen()?;
             Ok(json!({ "screen_off": true }))
         }
+        "screen_on" => {
+            display_cmd::turn_on_screen();
+            Ok(json!({ "screen_off": false }))
+        }
         "light" => {
             let lighting = app.state::<crate::driver::ite_lighting::SharedIteLightingManager>();
             let st = lighting.state.lock().clone();

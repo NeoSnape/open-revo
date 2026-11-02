@@ -1,5 +1,5 @@
 use windows::Win32::System::Power::{
-    SetThreadExecutionState, ES_AWAYMODE_REQUIRED, ES_CONTINUOUS, ES_DISPLAY_REQUIRED,
+    SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED,
     ES_SYSTEM_REQUIRED,
 };
 
@@ -139,23 +139,6 @@ pub fn start_hardware_state_watcher(
                 }
             }
 
-            // 3. Fast Track: Screen-off peripheral interaction wakeup
-            if super::is_screen_off() {
-                let unblock_tick = super::get_screen_off_unblock_tick();
-                if unblock_tick > 0 {
-                    let mut lii = super::LASTINPUTINFO {
-                        cb_size: std::mem::size_of::<super::LASTINPUTINFO>() as u32,
-                        dw_time: 0,
-                    };
-                    if unsafe { super::GetLastInputInfo(&mut lii) } != 0 {
-                        if lii.dw_time > unblock_tick.saturating_add(50) {
-                            super::set_screen_off(false);
-                            crate::log_info!("SCREEN", "User peripheral interaction detected after screen off; display active.");
-                        }
-                    }
-                }
-            }
-
             // 4. Fast Track: Centralized Power Execution State Machine
             // All SetThreadExecutionState calls are strictly bound to this dedicated watcher thread
             // to eliminate cross-thread lock leaks and ensure complete two-way state release.
@@ -181,8 +164,10 @@ pub fn start_hardware_state_watcher(
                             crate::log_info!("POWER_STATE", "Power lock acquired: Keep-awake active (display and system kept awake).");
                         }
                         ActivePowerLock::ScreenOffAway => {
-                            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
-                            crate::log_info!("POWER_STATE", "Power lock acquired: Screen-off active (system awake in away-mode).");
+                            // Display must stay "on" for Windows: on Modern Standby a display-off
+                            // (idle timeout or SC_MONITORPOWER) is itself the standby trigger.
+                            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+                            crate::log_info!("POWER_STATE", "Power lock acquired: Screen blanked (system + display kept on, black overlay shown).");
                         }
                     }
                 }

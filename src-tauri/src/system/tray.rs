@@ -103,7 +103,7 @@ pub fn build_tray_menu(
 
     let full_panel_item = CheckMenuItem::with_id(app, "mode_full_panel", "🖥️ 完整面板", true, is_expanded, None::<&str>)?;
     let mini_drawer_item = CheckMenuItem::with_id(app, "mode_mini_drawer", "🪟 迷你抽屉", true, !is_expanded, None::<&str>)?;
-    let turn_off_screen_item = MenuItem::with_id(app, "turn_off_screen", "🌙 关闭屏幕 (3秒防误触)", true, None::<&str>)?;
+    let turn_off_screen_item = MenuItem::with_id(app, "turn_off_screen", "🌙 关闭屏幕（按任意键恢复）", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
 
     let initial_mode = ec.lock().get_power_mode();

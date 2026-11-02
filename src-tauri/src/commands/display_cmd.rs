@@ -162,6 +162,12 @@ pub fn turn_off_screen() -> Result<(), String> {
     crate::system::switches::turn_off_screen()
 }
 
+/// Undo turn_off_screen without a key press (e.g. from `orv screen on`).
+#[tauri::command]
+pub fn turn_on_screen() {
+    crate::system::switches::turn_on_screen()
+}
+
 // -------------------------------------------------------------
 // Color Calibration (ICM / WCS) Commands (Fully Async & Non-blocking)
 // -------------------------------------------------------------

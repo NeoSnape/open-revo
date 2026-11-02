@@ -163,7 +163,7 @@ export const DrawerQuickSwitches: React.FC<DrawerQuickSwitchesProps> = ({
           <span className="m-quick-btn-label">{switches.keep_awake ? '常亮保持' : '防休眠'}</span>
         </button>
 
-        {/* 6. 关闭屏幕 (3秒防误触) */}
+        {/* 6. 关闭屏幕（黑屏不待机，按键恢复） */}
         <button
           className="m-quick-btn"
           onClick={async () => {
@@ -173,7 +173,7 @@ export const DrawerQuickSwitches: React.FC<DrawerQuickSwitchesProps> = ({
               console.error('Failed to turn off screen:', e);
             }
           }}
-          title="立即关闭屏幕显示器（3秒防外设误触唤醒，配合防休眠整夜挂机）"
+          title="黑屏并把背光降到 0，系统不待机、程序继续运行；鼠标不会唤醒，按任意键恢复"
         >
           <Moon size={16} />
           <span className="m-quick-btn-label">关闭屏幕</span>

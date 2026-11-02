@@ -28,34 +28,6 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 static KEEP_AWAKE_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SCREEN_OFF_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-static SCREEN_OFF_UNBLOCK_TICK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-#[repr(C)]
-pub struct LASTINPUTINFO {
-    pub cb_size: u32,
-    pub dw_time: u32,
-}
-
-#[link(name = "user32")]
-extern "system" {
-    pub fn BlockInput(f_block_it: i32) -> i32;
-    pub fn GetLastInputInfo(plii: *mut LASTINPUTINFO) -> i32;
-}
-
-#[link(name = "kernel32")]
-extern "system" {
-    pub fn GetTickCount() -> u32;
-}
-
-struct BlockInputGuard;
-
-impl Drop for BlockInputGuard {
-    fn drop(&mut self) {
-        unsafe {
-            BlockInput(0);
-        }
-    }
-}
 
 pub fn set_keep_awake(enable: bool) {
     KEEP_AWAKE_ACTIVE.store(enable, std::sync::atomic::Ordering::Relaxed);
@@ -71,70 +43,17 @@ pub fn is_screen_off() -> bool {
 
 pub fn set_screen_off(active: bool) {
     SCREEN_OFF_ACTIVE.store(active, std::sync::atomic::Ordering::Relaxed);
-    if !active {
-        SCREEN_OFF_UNBLOCK_TICK.store(0, std::sync::atomic::Ordering::Relaxed);
-    }
 }
 
-pub fn get_screen_off_unblock_tick() -> u32 {
-    SCREEN_OFF_UNBLOCK_TICK.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Turn off screen immediately with a 3-second peripheral input grace period.
-/// Suppresses mouse/keyboard wakeup triggers for 3s to let the user move their hand away;
-/// guarantees system execution (CPU & Agent tasks) stays awake overnight without forcing display on
-/// and NEVER broadcasts SC_MONITORPOWER to HWND_BROADCAST.
+/// "Screen off" that keeps the system running: black overlay + backlight 0 (see screen_blank.rs).
+/// A real display power-off would put this Modern Standby machine to sleep.
 pub fn turn_off_screen() -> Result<(), String> {
-    crate::log_info!("SCREEN", "Turn off screen requested. Starting 3-second peripheral grace period...");
-    set_screen_off(true);
+    crate::log_info!("SCREEN", "Turn off screen requested (black overlay + backlight 0, no standby)");
+    crate::system::screen_blank::blank()
+}
 
-    std::thread::spawn(|| {
-        let _guard = BlockInputGuard;
-
-        // 1. Brief delay to allow mouse-up / click release events to clear
-        std::thread::sleep(std::time::Duration::from_millis(150));
-
-        // 2. Block peripheral inputs (mouse & keyboard) so hand movement doesn't wake display immediately
-        unsafe {
-            BlockInput(1);
-        }
-
-        // 4. Send SC_MONITORPOWER message to power off monitors via our own dedicated window
-        // NEVER broadcast to HWND_BROADCAST (0xFFFF), which triggers Modern Standby & OS sleep!
-        unsafe {
-            const WM_SYSCOMMAND: u32 = 0x0112;
-            const SC_MONITORPOWER: usize = 0xF170;
-            if let Some(hwnd) = crate::system::power_listener::get_power_watcher_hwnd() {
-                let _ = windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(
-                    hwnd,
-                    WM_SYSCOMMAND,
-                    windows::Win32::Foundation::WPARAM(SC_MONITORPOWER),
-                    windows::Win32::Foundation::LPARAM(2),
-                );
-            } else {
-                let desktop = windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow();
-                let _ = windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(
-                    desktop,
-                    WM_SYSCOMMAND,
-                    windows::Win32::Foundation::WPARAM(SC_MONITORPOWER),
-                    windows::Win32::Foundation::LPARAM(2),
-                );
-            }
-        }
-
-        // 5. 3-second grace period for the user to step away
-        std::thread::sleep(std::time::Duration::from_millis(3000));
-
-        // 6. Record the unblock tick before restoring input
-        let tick = unsafe { GetTickCount() };
-        SCREEN_OFF_UNBLOCK_TICK.store(tick, std::sync::atomic::Ordering::Relaxed);
-
-        // 7. Unblock peripheral inputs safely
-        drop(_guard);
-        crate::log_info!("SCREEN", "3-second grace period ended. Peripheral input restored (subsequent interaction will wake display).");
-    });
-
-    Ok(())
+pub fn turn_on_screen() {
+    crate::system::screen_blank::unblank("command");
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

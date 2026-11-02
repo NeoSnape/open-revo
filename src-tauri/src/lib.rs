@@ -137,6 +137,7 @@ pub fn run() {
             commands::hardware_cmd::get_miniled_status,
             commands::hardware_cmd::set_miniled_status,
             commands::hardware_cmd::turn_off_screen,
+            commands::hardware_cmd::turn_on_screen,
             commands::hardware_cmd::set_win_key_locked,
             commands::hardware_cmd::resize_window,
             commands::hardware_cmd::fit_mini_window_height,
