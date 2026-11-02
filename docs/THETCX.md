@@ -59,6 +59,12 @@ i7-14650HX + RTX 5070 Ti Laptop（65 W 底 + 50 W cTGP + 25 W DB）。
 | `orv ec read <地址> [长度]` | EC 只读 |
 | `orv log [行数]` | 最近日志 |
 
+**完整功能（与界面对齐）**：`orv commands [关键词]` 列出后端全部 IPC 命令及参数，`orv call <命令> 参数=值 ...`
+（或 `orv call <命令> '<JSON>'`）调用其中任意一个。目录由 `build.rs` 在编译时扫描 `#[tauri::command]`
+并与 `lib.rs` 的 `generate_handler!` 求交集生成，所以界面能调的命令 CLI 都能调，以后新增的也自动可用。
+调用走 Tauri 自己的分发（`WebviewWindow::on_message` + 主窗口 invoke key），参数反序列化、权限检查、
+实现都和前端 `invoke()` 完全相同；即使 WebView2 进程挂了也能用。上表的短命令是常用操作的快捷方式。
+
 构建：`cargo build --release -p orv`（在 `src-tauri` 下）。它不能放进主 crate 的 `src/bin`：
 tauri-build 会把 requireAdministrator 清单嵌进主 crate 的所有可执行文件。
 

@@ -409,8 +409,141 @@ fn git_short_hash() -> String {
     }
 }
 
+/// Split a parameter list on top-level commas (ignoring commas inside <> () []).
+fn split_params(s: &str) -> Vec<String> {
+    let (mut out, mut cur, mut depth) = (Vec::new(), String::new(), 0i32);
+    for c in s.chars() {
+        match c {
+            '<' | '(' | '[' => depth += 1,
+            '>' | ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(std::mem::take(&mut cur));
+                continue;
+            }
+            _ => {}
+        }
+        cur.push(c);
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn camel(s: &str) -> String {
+    let mut out = String::new();
+    let mut up = false;
+    for c in s.chars() {
+        if c == '_' {
+            up = !out.is_empty();
+        } else if up {
+            out.extend(c.to_uppercase());
+            up = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Catalog of every IPC command registered in lib.rs (name, camelCase args as the frontend sends
+/// them, source module), so `orv commands` / `orv call` cover exactly what the GUI can invoke.
+fn generate_command_catalog() {
+    println!("cargo:rerun-if-changed=src");
+    let lib = fs::read_to_string("src/lib.rs").unwrap_or_default();
+    let registered: std::collections::HashSet<String> = lib
+        .find("generate_handler![")
+        .map(|i| {
+            let block = &lib[i..i + lib[i..].find("])").unwrap_or(0)];
+            block
+                .split(',')
+                .filter_map(|t| t.trim().rsplit("::").next().map(|n| n.trim().to_string()))
+                .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut entries = Vec::new();
+    let mut stack = vec![Path::new("src").to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if !p.ends_with("bin") {
+                    stack.push(p);
+                }
+                continue;
+            }
+            if p.extension().map_or(true, |x| x != "rs") {
+                continue;
+            }
+            let Ok(src) = fs::read_to_string(&p) else { continue };
+            let module = p.strip_prefix("src").unwrap_or(&p).with_extension("").to_string_lossy().replace('\\', "/");
+            let mut rest = src.as_str();
+            while let Some(i) = rest.find("#[tauri::command") {
+                rest = &rest[i..];
+                let Some(f) = rest.find("fn ") else { break };
+                let after = &rest[f + 3..];
+                let name: String = after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                let Some(open) = after.find('(') else { break };
+                let mut depth = 0;
+                let mut close = open;
+                for (j, c) in after[open..].char_indices() {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                close = open + j;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let params: Vec<serde_json::Value> = split_params(&after[open + 1..close])
+                    .iter()
+                    .filter_map(|raw| {
+                        // drop attributes like #[allow(non_snake_case)]
+                        let mut t = raw.trim();
+                        while t.starts_with("#[") {
+                            t = t[t.find(']').map(|k| k + 1).unwrap_or(t.len())..].trim();
+                        }
+                        let (n, ty) = t.split_once(':')?;
+                        let n = n.trim().trim_start_matches("mut ").trim();
+                        let ty = ty.split_whitespace().collect::<Vec<_>>().join(" ");
+                        let injected = ["State<", "AppHandle", "Window", "Webview", "tauri::ipc::Request", "Channel<"];
+                        if injected.iter().any(|k| ty.contains(k)) {
+                            return None;
+                        }
+                        Some(serde_json::json!({
+                            "name": camel(n),
+                            "type": ty,
+                            "optional": ty.starts_with("Option<"),
+                        }))
+                    })
+                    .collect();
+                if registered.contains(&name) {
+                    entries.push(serde_json::json!({ "name": name, "module": module, "params": params }));
+                }
+                rest = &after[close..];
+            }
+        }
+    }
+    entries.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR must be set by Cargo");
+    let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
+    fs::write(
+        Path::new(&out_dir).join("command_catalog.rs"),
+        format!("pub const COMMAND_CATALOG: &str = {:?};\n", json),
+    )
+    .expect("write command_catalog.rs");
+}
+
 fn main() {
     generate_hardware_vault();
+    generate_command_catalog();
 
     let git_hash = git_short_hash();
     if !git_hash.is_empty() {

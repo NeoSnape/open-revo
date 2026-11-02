@@ -25,6 +25,12 @@ const HELP: &str = "orv - OpenRevo 命令行
   orv switches [--json]             各开关当前状态
   orv ec read <地址> [长度]         EC 只读（地址可写 0x...）
   orv log [行数]                    最近的日志（默认 30 行）
+
+完整功能（与界面对齐，界面能做的都能调）：
+  orv commands [关键词]             列出后端全部命令及参数（按模块分组）
+  orv call <命令> [参数=值 ...]     调用任意命令，例：orv call set_display_brightness brightness=60
+  orv call <命令> '<JSON>'          参数也可直接给 JSON 对象
+    参数名写 snake_case 或 camelCase 都行；值按 JSON 解析（数字、true/false、[..]、{..}），否则当字符串
 ";
 
 fn die(msg: &str, code: i32) -> ! {
@@ -153,6 +159,97 @@ fn print_status(s: &Value) {
 fn pad(label: &str, width: usize) -> String {
     let w: usize = label.chars().map(|c| if (c as u32) >= 0x2E80 { 2 } else { 1 }).sum();
     format!("{}{}", label, " ".repeat(width.saturating_sub(w)))
+}
+
+fn camel(s: &str) -> String {
+    let mut out = String::new();
+    let mut up = false;
+    for c in s.chars() {
+        if c == '_' {
+            up = !out.is_empty();
+        } else if up {
+            out.extend(c.to_uppercase());
+            up = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn signature(c: &Value) -> String {
+    c["params"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|p| format!("{}{}: {}", p["name"].as_str().unwrap_or(""), if p["optional"].as_bool().unwrap_or(false) { "?" } else { "" }, p["type"].as_str().unwrap_or("")))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn list_commands(filter: Option<&str>, json_out: bool) {
+    let cat = call("catalog", json!({}));
+    let mut items: Vec<Value> = cat.as_array().cloned().unwrap_or_default();
+    if let Some(f) = filter {
+        let f = f.to_lowercase();
+        items.retain(|c| c["name"].as_str().unwrap_or("").contains(&f) || c["module"].as_str().unwrap_or("").to_lowercase().contains(&f));
+    }
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&items).unwrap_or_default());
+        return;
+    }
+    items.sort_by(|a, b| (a["module"].as_str(), a["name"].as_str()).cmp(&(b["module"].as_str(), b["name"].as_str())));
+    let mut last = String::new();
+    for c in &items {
+        let m = c["module"].as_str().unwrap_or("").to_string();
+        if m != last {
+            println!("\n[{}]", m);
+            last = m;
+        }
+        println!("  {}({})", c["name"].as_str().unwrap_or(""), signature(c));
+    }
+    println!("\n共 {} 个命令。用法：orv call <命令> 参数=值 ...", items.len());
+}
+
+fn generic_call(pos: &[&String], json_out: bool) {
+    let name = pos.get(1).map(|s| s.as_str()).unwrap_or_else(|| die("用法: orv call <命令> [参数=值 ...]", 2));
+    let rest: Vec<&str> = pos[2..].iter().map(|s| s.as_str()).collect();
+    let args = if rest.len() == 1 && rest[0].trim_start().starts_with('{') {
+        serde_json::from_str(rest[0]).unwrap_or_else(|e| die(&format!("JSON 参数无效: {}", e), 2))
+    } else {
+        let mut m = serde_json::Map::new();
+        for kv in rest {
+            let (k, v) = kv.split_once('=').unwrap_or_else(|| die(&format!("参数要写成 名称=值: {}", kv), 2));
+            let val = serde_json::from_str::<Value>(v).unwrap_or_else(|_| Value::String(v.to_string()));
+            m.insert(camel(k), val);
+        }
+        Value::Object(m)
+    };
+    // Check names against the catalog so a typo gives the real signature instead of a vague error.
+    let cat = call("catalog", json!({}));
+    let entry = cat.as_array().and_then(|a| a.iter().find(|c| c["name"] == name).cloned());
+    let Some(entry) = entry else {
+        let close: Vec<String> = cat.as_array().cloned().unwrap_or_default().iter().filter_map(|c| c["name"].as_str().map(String::from)).filter(|n| n.contains(name) || name.contains(n.as_str())).take(8).collect();
+        die(&format!("没有命令 '{}'{}", name, if close.is_empty() { String::new() } else { format!("，是不是: {}", close.join(", ")) }), 2)
+    };
+    let params = entry["params"].as_array().cloned().unwrap_or_default();
+    for k in args.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default() {
+        if !params.iter().any(|p| p["name"] == k) {
+            die(&format!("{} 没有参数 '{}'。签名: {}({})", name, k, name, signature(&entry)), 2);
+        }
+    }
+    for p in &params {
+        if !p["optional"].as_bool().unwrap_or(false) && args.get(p["name"].as_str().unwrap_or("")).is_none() {
+            die(&format!("缺少参数 '{}'。签名: {}({})", p["name"].as_str().unwrap_or(""), name, signature(&entry)), 2);
+        }
+    }
+    let r = call("invoke", json!({ "command": name, "args": args }));
+    if json_out || !r.is_null() {
+        println!("{}", if r.is_string() && !json_out { r.as_str().unwrap().to_string() } else { serde_json::to_string_pretty(&r).unwrap_or_default() });
+    } else {
+        println!("完成");
+    }
 }
 
 fn parse_num(s: &str) -> u64 {
@@ -346,6 +443,8 @@ fn main() {
                 }
             }
         }
+        Some("commands") => list_commands(p(1).map(|s| s.as_str()), json_out),
+        Some("call") => generic_call(&pos, json_out),
         Some("log") => show_log(p(1).map(|s| parse_num(s) as usize).unwrap_or(30)),
         Some(other) => die(&format!("未知命令 '{}'，运行 orv help 查看用法", other), 2),
     }

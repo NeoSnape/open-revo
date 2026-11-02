@@ -2,7 +2,8 @@
 // A named pipe (\\.\pipe\openrevo-cli) that only this Windows user, Administrators and SYSTEM may open.
 // One JSON request line in ({"cmd": "...", "args": {...}}), one JSON response out, then disconnect.
 // Every command goes through the same functions the UI buttons call, so the EC cache, config and
-// the open panel stay consistent. There is deliberately no raw EC write.
+// the open panel stay consistent. `invoke` reaches every IPC command the panel itself can call
+// (and nothing else: the name must be in the build-time catalog of registered commands).
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
@@ -133,6 +134,20 @@ fn dispatch(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, String> {
     };
     match cmd {
         "ping" => Ok(json!({ "version": env!("CARGO_PKG_VERSION"), "pid": std::process::id() })),
+        "catalog" => Ok(serde_json::from_str(catalog::COMMAND_CATALOG).unwrap_or(Value::Null)),
+        "invoke" => {
+            let command = arg_str(args, "command")?.to_string();
+            let known: Value = serde_json::from_str(catalog::COMMAND_CATALOG).unwrap_or(Value::Null);
+            if !known.as_array().map_or(false, |a| a.iter().any(|c| c["name"] == command)) {
+                return Err(format!("unknown command '{}' (see `orv commands`)", command));
+            }
+            let payload = args.get("args").cloned().unwrap_or_else(|| json!({}));
+            let result = invoke_like_frontend(app, &command, payload)?;
+            if !command.starts_with("get_") && !command.starts_with("read_") && !command.starts_with("is_") {
+                refresh_ui(app);
+            }
+            Ok(result)
+        }
         "status" => Ok(status(app, args)),
 
         "mode" => {
@@ -249,6 +264,48 @@ fn dispatch(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, String> {
     }
 }
 
+mod catalog {
+    include!(concat!(env!("OUT_DIR"), "/command_catalog.rs"));
+}
+
+/// Run a registered IPC command exactly as the panel's `invoke()` would: same argument
+/// deserialisation (camelCase keys), same ACL check, same implementation, on the main thread.
+/// Works even if the WebView2 process is gone, since dispatch happens on the Rust side.
+fn invoke_like_frontend(app: &AppHandle, command: &str, payload: Value) -> Result<Value, String> {
+    use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponse, InvokeResponseBody};
+    let window = app.get_webview_window("main").ok_or("main window not available")?;
+    let url = window.url().map_err(|e| format!("main window url: {}", e))?;
+    let request = tauri::webview::InvokeRequest {
+        cmd: command.to_string(),
+        callback: CallbackFn(0),
+        error: CallbackFn(1),
+        url,
+        body: InvokeBody::Json(payload),
+        headers: Default::default(),
+        invoke_key: app.invoke_key().to_string(),
+    };
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Value, String>>();
+    app.run_on_main_thread(move || {
+        window.on_message(
+            request,
+            Box::new(move |_webview, _cmd, response, _cb, _err| {
+                let out = match response {
+                    InvokeResponse::Ok(InvokeResponseBody::Json(s)) => Ok(serde_json::from_str(&s).unwrap_or(Value::String(s))),
+                    InvokeResponse::Ok(InvokeResponseBody::Raw(b)) => Ok(json!({ "raw_bytes": b.len() })),
+                    InvokeResponse::Err(e) => Err(match e.0 {
+                        Value::String(s) => s,
+                        other => other.to_string(),
+                    }),
+                };
+                let _ = tx.send(out);
+            }),
+        );
+    })
+    .map_err(|e| format!("main thread dispatch failed: {}", e))?;
+    rx.recv_timeout(std::time::Duration::from_secs(60))
+        .map_err(|_| format!("'{}' did not answer within 60 s", command))?
+}
+
 fn handle(app: &AppHandle, line: &str) -> Value {
     let req: Value = match serde_json::from_str(line) {
         Ok(v) => v,
@@ -256,7 +313,12 @@ fn handle(app: &AppHandle, line: &str) -> Value {
     };
     let cmd = req.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
     let args = req.get("args").cloned().unwrap_or(Value::Null);
-    if !matches!(cmd, "ping" | "status" | "fan" | "profiles" | "switches" | "ec_read") && !(cmd == "gpu" && args.get("mode").is_none()) {
+    let read_only_invoke = cmd == "invoke"
+        && args.get("command").and_then(|v| v.as_str()).map_or(false, |c| c.starts_with("get_") || c.starts_with("read_") || c.starts_with("is_"));
+    if !matches!(cmd, "ping" | "status" | "fan" | "profiles" | "switches" | "ec_read" | "catalog")
+        && !(cmd == "gpu" && args.get("mode").is_none())
+        && !read_only_invoke
+    {
         crate::log_info!("CLI", "orv {} {}", cmd, args);
     }
     match dispatch(app, cmd, &args) {
