@@ -278,6 +278,8 @@ pub fn run() {
         ])
         .setup(move |app| {
             crate::system::boot_trace::boot_log("SETUP", "Tauri setup closure entered");
+            // First thing: a previous run that died while the screen was blanked left the backlight at 0.
+            crate::system::screen_blank::recover_after_crash();
             crate::system::actuator::UnifiedPowerActuator::global().bind_app_handle(app.handle().clone());
             crate::system::webview_orchestrator::WebviewOrchestrator::global().bind_app_handle(app.handle().clone());
 
@@ -340,7 +342,6 @@ pub fn run() {
             crate::system::telemetry::start_status_logger(ec_for_status, gpu_for_status);
             crate::system::rtss_osd::start(ec_for_rtss, gpu_for_rtss);
             crate::system::rtss_frametime::start();
-            crate::system::screen_blank::recover_after_crash();
             crate::system::cli_server::start(app.handle().clone());
 
             // Step 6.11: Start adaptive dynamic telemetry heartbeat broadcaster
@@ -368,7 +369,7 @@ pub fn run() {
         .run(|_app_handle, event| {
             if let tauri::RunEvent::Exit = event {
                 println!("[OpenRevo] Process exiting. Executing clean webview shutdown and hardware safety shutdown...");
-                crate::system::screen_blank::unblank("exit");
+                crate::system::screen_blank::unblank_on_exit();
                 crate::system::webview_orchestrator::WebviewOrchestrator::global().safe_shutdown_all_subviews();
                 crate::system::tray::safe_hardware_shutdown_on_exit();
                 crate::system::rtss_osd::release_now();

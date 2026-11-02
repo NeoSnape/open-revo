@@ -449,7 +449,7 @@ export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
                 <RevBadge variant="accent">Power Gating</RevBadge>
               </div>
               <div className="sys-row-desc">
-                允许在拔掉电源或 Type-C 供电时自由切换狂暴模式与极客自定义调校，且拔电时不会强制降级为平衡模式；适合进自定义设置极致低功耗或离电性能释放
+                允许在拔掉电源或 Type-C 供电时自由切换狂暴模式与自定义模式，且拔电时不会强制降级为平衡模式；适合进自定义设置极致低功耗或离电性能释放
               </div>
             </div>
             <div className="sys-row-controls">
@@ -903,8 +903,8 @@ export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
               <ul className="sys-modal-list">
                 <li><strong>电池过流保护断电</strong>：游戏本电池瞬时放电功率远低于原装电源适配器，离电下运行重负载可能瞬间触发主板 BMS 电池过流保护，导致突然掉电黑屏或硬件重启。</li>
                 <li><strong>电池寿命加速衰减</strong>：持续的大倍率放电会使锂电池内部剧烈发热，显著加速电池容量老化与衰减。</li>
-                <li><strong>拔电不再强制降级</strong>：拔掉适配器后，系统将保持当前的狂暴或极客模式，不会再自动回切至平衡模式。</li>
-                <li><strong>推荐应用场景</strong>：如果您是为了在离电下进入极客调校“设定比办公模式更低的 CPU/GPU 功耗与温控以追求极致长续航”，可以放心使用；但切勿在离电下运行重度 3D 游戏或高负载渲染。</li>
+                <li><strong>拔电不再强制降级</strong>：拔掉适配器后，系统将保持当前的狂暴或自定义模式，不会再自动回切至平衡模式。</li>
+                <li><strong>推荐应用场景</strong>：如果您是为了在离电下进入自定义模式“设定比办公模式更低的 CPU/GPU 功耗与温控以追求极致长续航”，可以放心使用；但切勿在离电下运行重度 3D 游戏或高负载渲染。</li>
               </ul>
             </div>
 

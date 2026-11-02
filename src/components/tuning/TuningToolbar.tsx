@@ -121,7 +121,7 @@ export const TuningToolbar: React.FC<TuningToolbarProps> = ({
               whiteSpace: 'nowrap',
             }}
           >
-            极客自定义调校
+            自定义调校
           </div>
         </div>
 

@@ -124,34 +124,24 @@ fn to_value<T: serde::Serialize>(v: T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
 }
 
-/// Commands an unelevated client may not reach through `invoke`: they launch programs, read or write
-/// arbitrary paths, reboot, manage services/tasks, or push raw tuning values. The pipe is open to every
-/// process of this user, and OpenRevo runs elevated, so without this any medium-integrity program
-/// could use OpenRevo to act as administrator (e.g. trigger_shortcut_action LaunchApp).
-const ELEVATED_ONLY: &[&str] = &[
-    "reboot_computer", "clear_user_data_dir", "migrate_user_data_dir", "register_custom_shortcut",
-    "unregister_custom_shortcut", "trigger_shortcut_action", "toggle_oem_service", "emergency_hard_unlock_gpu",
-    "save_app_config", "set_autostart_enabled", "save_custom_brfx", "apply_custom_brfx_script",
-    "delete_custom_color_profile", "apply_color_profile", "apply_custom_profile", "apply_live_custom_tweak",
-    "apply_gpu_tuning_state", "apply_lighting_hardware_override", "set_bld_fan_speed_cap", "apply_fan_curve_live",
-    "save_profile_preset", "create_profile_preset", "rename_profile_preset", "delete_profile_preset",
-    "reset_profile_preset", "set_battery_hardware_limit", "set_experimental_igpu_unlock", "set_cpu_safety_guard",
-    "heal_cpu_power_contract", "heal_gpu_power_contract", "reload_model_profiles", "set_log_filter",
+/// What an unelevated client may run. The pipe is open to every process of this user while OpenRevo
+/// runs elevated, so anything not on this list (launching programs, paths and files, services, tasks,
+/// firmware/NVRAM, device enable, raw tuning values, reboot, and every command added in the future)
+/// needs `orv` from an administrator terminal. Reads (`get_*` / `read_*`) are allowed.
+const UNELEVATED_ALLOWED: &[&str] = &[
+    "set_power_mode", "set_fan_boost", "set_preset_fan_policy", "set_active_profile_id",
+    "switch_refresh_rate", "set_display_monitor_refresh_rate", "set_display_brightness", "set_miniled_status",
+    "set_win_key_locked", "set_rtss_osd_enabled", "set_osd_config", "save_osd_config", "trigger_osd_preview",
+    "turn_off_screen", "turn_on_screen", "apply_keyboard_lighting", "set_keyboard_sleep_timeout",
+    "set_lighting_sleep_timer", "set_wake_window_mode", "set_mini_auto_hide",
 ];
-const ELEVATED_PREFIXES: &[&str] = &["open_", "import_", "export_"];
-/// Parameter names that carry paths, file contents, scripts or arbitrary structures.
-const RISKY_PARAMS: &[&str] = &["path", "file", "dir", "content", "bytes", "script", "binding", "action", "cfg"];
 
-fn needs_elevation(entry: &Value) -> bool {
-    let name = entry["name"].as_str().unwrap_or("");
-    ELEVATED_ONLY.contains(&name)
-        || ELEVATED_PREFIXES.iter().any(|p| name.starts_with(p))
-        || entry["params"].as_array().map_or(false, |ps| {
-            ps.iter().any(|p| {
-                let n = p["name"].as_str().unwrap_or("").to_lowercase();
-                RISKY_PARAMS.iter().any(|r| n.contains(r))
-            })
-        })
+fn allowed_unelevated(command: &str) -> bool {
+    command.starts_with("get_") || command.starts_with("read_") || UNELEVATED_ALLOWED.contains(&command)
+}
+
+fn needs_admin_error(what: &str) -> String {
+    format!("'{}' can only be run from an administrator terminal (orv from an elevated shell)", what)
 }
 
 fn dispatch(app: &AppHandle, cmd: &str, args: &Value, client_elevated: bool) -> Result<Value, String> {
@@ -172,11 +162,9 @@ fn dispatch(app: &AppHandle, cmd: &str, args: &Value, client_elevated: bool) -> 
                 .as_array()
                 .and_then(|a| a.iter().find(|c| c["name"] == command))
                 .ok_or_else(|| format!("unknown command '{}' (see `orv commands`)", command))?;
-            if !client_elevated && needs_elevation(entry) {
-                return Err(format!(
-                    "'{}' can only be run from an administrator terminal (it can launch programs, touch files or push raw tuning values)",
-                    command
-                ));
+            let _ = entry;
+            if !client_elevated && !allowed_unelevated(&command) {
+                return Err(needs_admin_error(&command));
             }
             let payload = args.get("args").cloned().unwrap_or_else(|| json!({}));
             let result = invoke_like_frontend(app, &command, payload)?;
@@ -234,6 +222,10 @@ fn dispatch(app: &AppHandle, cmd: &str, args: &Value, client_elevated: bool) -> 
                 if !matches!(m, "hybrid" | "dgpu" | "igpu") {
                     return Err("gpu mode must be hybrid | dgpu | igpu".into());
                 }
+                // Writes the firmware NVRAM and can reboot the machine.
+                if !client_elevated {
+                    return Err(needs_admin_error("gpu <mode>"));
+                }
                 if !args.get("yes").and_then(|v| v.as_bool()).unwrap_or(false) {
                     return Err("switching the GPU mode needs a reboot; repeat with --yes".into());
                 }
@@ -262,6 +254,11 @@ fn dispatch(app: &AppHandle, cmd: &str, args: &Value, client_elevated: bool) -> 
                 return Err(format!("unknown switch '{}'", name));
             }
             let on = arg_bool(args, "on")?;
+            // Re-enabling a disabled camera/microphone device is a privacy-relevant admin action;
+            // turning them off is always allowed.
+            if on && matches!(name, "camera" | "mic") && !client_elevated {
+                return Err(needs_admin_error(&format!("{} on", name)));
+            }
             let res = switches_cmd::set_device_switch(app.clone(), name.to_string(), on)?;
             changed(json!({ "switch": name, "on": res }))
         }
@@ -327,14 +324,13 @@ fn invoke_like_frontend(app: &AppHandle, command: &str, payload: Value) -> Resul
     };
     let (tx, rx) = std::sync::mpsc::channel::<Result<Value, String>>();
     // On timeout the queued call is cancelled if it has not started yet, so a late run can't surprise a script.
-    let started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let (started_in, cancelled_in) = (started.clone(), cancelled.clone());
+    use std::sync::atomic::{AtomicU8, Ordering as AO};
+    let phase = std::sync::Arc::new(AtomicU8::new(0));
+    let phase_in = phase.clone();
     app.run_on_main_thread(move || {
-        if cancelled_in.load(std::sync::atomic::Ordering::SeqCst) {
-            return;
+        if phase_in.compare_exchange(0, 1, AO::SeqCst, AO::SeqCst).is_err() {
+            return; // cancelled by the timeout below
         }
-        started_in.store(true, std::sync::atomic::Ordering::SeqCst);
         window.on_message(
             request,
             Box::new(move |_webview, _cmd, response, _cb, _err| {
@@ -354,11 +350,10 @@ fn invoke_like_frontend(app: &AppHandle, command: &str, payload: Value) -> Resul
     match rx.recv_timeout(std::time::Duration::from_secs(60)) {
         Ok(r) => r,
         Err(_) => {
-            cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
-            if started.load(std::sync::atomic::Ordering::SeqCst) {
-                Err(format!("'{}' is still running after 60 s; its result is unknown", command))
-            } else {
+            if phase.compare_exchange(0, 2, AO::SeqCst, AO::SeqCst).is_ok() {
                 Err(format!("'{}' was not started within 60 s (main thread busy) and has been cancelled", command))
+            } else {
+                Err(format!("'{}' is still running after 60 s; its result is unknown", command))
             }
         }
     }
@@ -382,12 +377,12 @@ fn handle(app: &AppHandle, line: &str, client_elevated: bool) -> Value {
             shown.truncate(shown.char_indices().nth(300).map_or(shown.len(), |(i, _)| i));
             shown.push_str("...");
         }
-        crate::log_info!("CLI", "orv {} {}{}", cmd, shown, if client_elevated { " (elevated)" } else { "" });
+        crate::log_info!("CLI", "orv {:?} {}{}", cmd, shown, if client_elevated { " (elevated)" } else { "" });
     }
     match dispatch(app, cmd, &args, client_elevated) {
         Ok(data) => json!({ "ok": true, "data": data }),
         Err(e) => {
-            crate::log_warn!("CLI", "orv {} failed: {}", cmd, e);
+            crate::log_warn!("CLI", "orv {:?} failed: {}", cmd, e);
             json!({ "ok": false, "error": e })
         }
     }
@@ -430,8 +425,8 @@ fn client_is_elevated(pipe: windows::Win32::Foundation::HANDLE) -> bool {
 #[cfg(windows)]
 fn serve_client(app: AppHandle, pipe_raw: isize) {
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows::Win32::Storage::FileSystem::{FlushFileBuffers, ReadFile, WriteFile};
-    use windows::Win32::System::Pipes::{DisconnectNamedPipe, PeekNamedPipe};
+    use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
+    use windows::Win32::System::Pipes::PeekNamedPipe;
     let pipe = HANDLE(pipe_raw as _);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let mut req = Vec::new();
@@ -466,13 +461,11 @@ fn serve_client(app: AppHandle, pipe_raw: isize) {
         let mut written = 0u32;
         unsafe {
             let _ = WriteFile(pipe, Some(&out), Some(&mut written), None);
-            let _ = FlushFileBuffers(pipe);
         }
     } else {
         crate::log_warn!("CLI", "Dropped a client that sent no complete request within 5 s");
     }
     unsafe {
-        let _ = DisconnectNamedPipe(pipe);
         let _ = CloseHandle(pipe);
     }
 }
@@ -497,7 +490,7 @@ fn serve(app: AppHandle) {
     static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
     // DACL: SYSTEM, Administrators and the user this process runs as (the logged-in user; elevated via the task).
-    // What an unelevated client may do is limited per command (see ELEVATED_ONLY).
+    // What an unelevated client may do is limited per command (see UNELEVATED_ALLOWED).
     let sddl = unsafe {
         let mut token = Default::default();
         let mut user_sid = String::new();
@@ -546,7 +539,7 @@ fn serve(app: AppHandle) {
                 PIPE_ACCESS_DUPLEX,
                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 PIPE_UNLIMITED_INSTANCES,
-                64 * 1024,
+                1024 * 1024, // out: every response fits, so WriteFile never waits for a client that won't read
                 64 * 1024,
                 0,
                 Some(&sa),
@@ -570,7 +563,10 @@ fn serve(app: AppHandle) {
         }
         if IN_FLIGHT.fetch_add(1, Ordering::SeqCst) >= MAX_CLIENTS {
             IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+            let busy = b"{\"ok\":false,\"error\":\"busy: too many orv clients at once, try again\"}\n";
+            let mut written = 0u32;
             unsafe {
+                let _ = windows::Win32::Storage::FileSystem::WriteFile(pipe, Some(busy), Some(&mut written), None);
                 let _ = CloseHandle(pipe);
             }
             continue;

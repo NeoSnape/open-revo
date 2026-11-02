@@ -281,8 +281,7 @@ pub fn handle_tray_menu_event(
             let _ = app_handle.emit_to("main", "oem-service-status-changed", next_state);
         }
         "quit" => {
-            crate::system::webview_orchestrator::WebviewOrchestrator::global().safe_shutdown_all_subviews();
-            safe_hardware_shutdown_on_exit();
+            // RunEvent::Exit runs the shutdown (subviews, hardware handover, screen restore) once.
             app_handle.exit(0);
         }
         _ => {}

@@ -7,14 +7,18 @@
 // and the machine to Office mode (through the EC bridge; Windows power overlay and the OEM
 // MainOption.json follow as with any mode switch, config.json keeps the user's choice).
 //
-// Wake: a key press (low-level keyboard hook; a GetAsyncKeyState poll covers a dead hook), session
-// lock, standby, `turn_on_screen` / `orv screen on`, or app exit. Mouse movement and clicks are
-// swallowed by the overlay and never wake it.
+// Wake: a key press (low-level keyboard hook, plus a GetAsyncKeyState poll in case Windows dropped the
+// hook), session lock, standby, `turn_on_screen` / `orv screen on`, or app exit. Mouse movement and
+// clicks are swallowed by the overlay and never wake it.
 //
-// All transitions run under one mutex with a generation counter, so blank/unblank racing each other
-// (e.g. `orv screen off; orv screen on`) can never leave an orphaned overlay or a half-applied state.
+// Locking (two locks, never nested the other way round):
+// - STATE: quick flag/field updates only, never held across I/O, a window call or a sleep.
+// - TRANSITION: serialises the slow parts (overlay setup with its display/EC changes, and restore).
+//   Only worker threads take it; the main thread and the keyboard hook never do (exit uses a timeout),
+//   so a ChangeDisplaySettings broadcast can't deadlock against a blocked main thread and the hook is
+//   never stalled.
 // A marker file records the saved brightness; if the process dies while blanked, the next start
-// restores the backlight from it.
+// restores the backlight and the display mode from it.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -23,7 +27,9 @@ use parking_lot::Mutex;
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
-use windows::Win32::System::RemoteDesktop::{WTSRegisterSessionNotification, NOTIFY_FOR_THIS_SESSION};
+use windows::Win32::System::RemoteDesktop::{
+    WTSRegisterSessionNotification, WTSUnRegisterSessionNotification, NOTIFY_FOR_THIS_SESSION,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, GetSystemMetrics, KillTimer,
@@ -59,6 +65,7 @@ static STATE: Mutex<State> = Mutex::new(State {
     changed_refresh: false,
     saved_mode: None,
 });
+static TRANSITION: Mutex<()> = Mutex::new(());
 /// Lock-free mirror of `State::active` for the keyboard hook (must never block).
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Monotonic tick (GetTickCount64) of the last blank; lock-free for the hook.
@@ -72,23 +79,41 @@ pub fn is_active() -> bool {
     ACTIVE.load(Ordering::SeqCst)
 }
 
+fn is_current(generation: u64) -> bool {
+    let st = STATE.lock();
+    st.active && st.generation == generation
+}
+
 fn marker_path() -> std::path::PathBuf {
     std::path::PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join(r"OpenRevo\screen_blank.marker")
 }
 
-/// Startup: if the previous process died while blanked, put the backlight back.
+/// Startup: if the previous process died while blanked, put the backlight and display mode back.
+/// The marker is only removed once the backlight is confirmed, so a failure is retried next start.
 pub fn recover_after_crash() {
     let path = marker_path();
     let Ok(text) = std::fs::read_to_string(&path) else { return };
-    if let Ok(level) = text.trim().parse::<u8>() {
-        let ok = crate::system::display::set_brightness(level).is_ok();
-        crate::log_warn!("SCREEN", "Previous run ended while the screen was blanked; brightness restored to {}% (ok={})", level, ok);
+    // The 60 Hz drop was session-only; make sure the panel is back on the registry (user) mode.
+    let _ = crate::system::display::reset_display_mode_to_registry();
+    let ok = match text.trim().parse::<u8>() {
+        Ok(level) => {
+            let ok = crate::system::display::set_brightness(level).is_ok()
+                && crate::system::display::get_brightness().map_or(false, |b| b == level);
+            crate::log_warn!("SCREEN", "Previous run ended while the screen was blanked; brightness restored to {}% (ok={})", level, ok);
+            ok
+        }
+        Err(_) => true, // unreadable marker: nothing to restore
+    };
+    if ok {
+        let _ = std::fs::remove_file(path);
     }
-    let _ = std::fs::remove_file(path);
 }
 
 fn wake_async(reason: &'static str) {
-    std::thread::spawn(move || unblank(reason));
+    if std::thread::Builder::new().name("openrevo-screen-wake".into()).spawn(move || unblank(reason)).is_err() {
+        // No thread available: restore inline rather than leave the screen black.
+        unblank(reason);
+    }
 }
 
 unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -104,9 +129,11 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
             on_key_down();
             LRESULT(0)
         }
-        // Fallback for a dead keyboard hook / no foreground: poll the physical key state.
+        // Independent of the hook: Windows silently removes a low-level hook that ever times out, and
+        // a key swallowed by a live hook never reaches the async key state, so this only fires when
+        // the hook is not doing its job.
         WM_TIMER if wparam.0 == KEY_POLL_TIMER => {
-            if !crate::system::hooks::is_keyboard_hook_alive() && grace_over() && any_key_down() {
+            if is_active() && grace_over() && any_key_down() {
                 wake_async("key press (polled)");
             }
             LRESULT(0)
@@ -124,6 +151,7 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
         }
         WM_CLOSE => {
             let _ = KillTimer(hwnd, KEY_POLL_TIMER);
+            let _ = WTSUnRegisterSessionNotification(hwnd);
             let _ = DestroyWindow(hwnd);
             LRESULT(0)
         }
@@ -155,7 +183,7 @@ fn any_key_down() -> bool {
     (0x08..=0xFEi32).any(|vk| unsafe { (GetAsyncKeyState(vk) as u16 & 0x8000) != 0 })
 }
 
-/// Black out every monitor and dim the backlight. Idempotent.
+/// Black out every monitor and dim the backlight. Idempotent; returns immediately (work runs on a worker).
 pub fn blank() -> Result<(), String> {
     let generation = {
         let mut st = STATE.lock();
@@ -166,22 +194,28 @@ pub fn blank() -> Result<(), String> {
         st.generation += 1;
         BLANKED_AT_TICK.store(tick_ms(), Ordering::SeqCst);
         ACTIVE.store(true, Ordering::SeqCst);
-        // Watcher switches the execution state to "system + display required" on its next tick.
-        crate::system::switches::set_screen_off(true);
         st.generation
     };
+    // Watcher switches the execution state to "system + display required" on its next tick.
+    crate::system::switches::set_screen_off(true);
     if !crate::system::hooks::is_keyboard_hook_alive() {
         crate::log_warn!("SCREEN", "Keyboard hook is not running; keys are detected by polling while blanked");
     }
-
-    std::thread::Builder::new()
+    if let Err(e) = std::thread::Builder::new()
         .name("openrevo-screen-blank".into())
         .spawn(move || overlay_thread(generation))
-        .map_err(|e| e.to_string())?;
+    {
+        abort_blank(generation);
+        return Err(format!("could not start the screen-blank thread: {}", e));
+    }
     Ok(())
 }
 
 fn overlay_thread(generation: u64) {
+    let _transition = TRANSITION.lock();
+    if !is_current(generation) {
+        return; // cancelled before we started
+    }
     unsafe {
         static REGISTER: std::sync::Once = std::sync::Once::new();
         REGISTER.call_once(|| {
@@ -215,57 +249,67 @@ fn overlay_thread(generation: u64) {
                 return;
             }
         };
-
-        // Publish the window and dim, unless this blank was already cancelled.
         {
             let mut st = STATE.lock();
-            if !st.active || st.generation != generation {
+            if !(st.active && st.generation == generation) {
                 drop(st);
                 let _ = DestroyWindow(hwnd);
                 return;
             }
             st.hwnd = hwnd.0 as isize;
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, cx, cy, SWP_SHOWWINDOW);
-            let _ = SetForegroundWindow(hwnd);
-            let _ = SetTimer(hwnd, KEY_POLL_TIMER, 150, None);
-            let _ = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
+        }
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, cx, cy, SWP_SHOWWINDOW);
+        let _ = SetForegroundWindow(hwnd);
+        if SetTimer(hwnd, KEY_POLL_TIMER, 150, None) == 0 {
+            crate::log_warn!("SCREEN", "Key poll timer could not be started; wake relies on the keyboard hook");
+        }
+        let _ = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
+
+        // Slow changes, each recorded as soon as it is made so a restore (waiting on TRANSITION)
+        // undoes exactly what was done. Stop early if the blank was cancelled meanwhile.
+        if is_current(generation) {
             // Backlight down only once the overlay is up, so nothing bright flashes at 0 %.
             match crate::system::display::get_brightness() {
                 Ok(b) => {
-                    st.saved_brightness = Some(b);
                     let _ = std::fs::write(marker_path(), b.to_string());
+                    STATE.lock().saved_brightness = Some(b);
                     let _ = crate::system::display::set_brightness(0);
                 }
                 Err(e) => crate::log_warn!("SCREEN", "Could not read brightness ({}); overlay only", e),
             }
-            // 60 Hz for this session only.
-            let hz = crate::system::display::get_refresh_rate();
-            if hz != BLANK_HZ {
-                match crate::system::display::set_refresh_rate_temporary(BLANK_HZ) {
-                    Ok(()) => st.changed_refresh = true,
-                    Err(e) => crate::log_warn!("SCREEN", "Could not switch to {} Hz while blanked: {}", BLANK_HZ, e),
-                }
+        }
+        let hz = crate::system::display::get_refresh_rate();
+        if is_current(generation) && hz != BLANK_HZ {
+            match crate::system::display::set_refresh_rate_temporary(BLANK_HZ) {
+                Ok(()) => STATE.lock().changed_refresh = true,
+                Err(e) => crate::log_warn!("SCREEN", "Could not switch to {} Hz while blanked: {}", BLANK_HZ, e),
             }
+        }
+        if is_current(generation) {
             if let Some(ec) = crate::system::power_listener::global_ec() {
                 let mode = ec.lock().get_power_mode();
                 if mode != BLANK_MODE {
-                    st.saved_mode = Some(mode);
+                    STATE.lock().saved_mode = Some(mode);
                     ec.lock().set_power_mode(BLANK_MODE);
                 }
             }
+        }
+        {
+            let st = STATE.lock();
             crate::log_info!(
                 "SCREEN",
-                "Screen blanked: overlay {}x{}, backlight {:?} -> 0, refresh {} -> {} Hz, mode {:?} -> {}; system stays awake. Any key restores.",
+                "Screen blanked: overlay {}x{}, backlight {:?} -> 0, refresh {} Hz -> {}, mode {:?} -> {}; system stays awake. Any key restores.",
                 cx,
                 cy,
                 st.saved_brightness,
                 hz,
-                if st.changed_refresh { BLANK_HZ } else { hz },
+                if st.changed_refresh { "60 Hz" } else { "unchanged" },
                 st.saved_mode,
                 BLANK_MODE
             );
         }
+        drop(_transition); // setup done; a restore may run now
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).into() {
@@ -281,46 +325,95 @@ fn overlay_thread(generation: u64) {
 
 /// Overlay creation failed: undo the flags set by `blank()`.
 fn abort_blank(generation: u64) {
-    let mut st = STATE.lock();
-    if st.active && st.generation == generation {
-        st.active = false;
-        st.generation += 1;
-        ACTIVE.store(false, Ordering::SeqCst);
+    let undone = {
+        let mut st = STATE.lock();
+        if st.active && st.generation == generation {
+            st.active = false;
+            st.generation += 1;
+            ACTIVE.store(false, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
+    };
+    if undone {
         crate::system::switches::set_screen_off(false);
     }
 }
 
-/// Remove the overlay and restore refresh rate, backlight and power mode. Idempotent.
-pub fn unblank(reason: &str) {
+/// Flip the state to "not blanked". Returns false if it was not blanked.
+fn deactivate() -> bool {
     let mut st = STATE.lock();
     if !st.active {
-        return;
+        return false;
     }
     st.active = false;
     st.generation += 1;
     ACTIVE.store(false, Ordering::SeqCst);
+    true
+}
 
+/// Remove the overlay and restore refresh rate, backlight and power mode. Idempotent.
+/// Runs on worker threads (wake_async / turn_on_screen); waits for an overlay setup in progress.
+pub fn unblank(reason: &str) {
+    if !deactivate() {
+        return;
+    }
+    let _transition = TRANSITION.lock();
+    restore(reason);
+}
+
+/// App exit (main thread): never wait long for a worker, which could be inside a display-mode
+/// broadcast that needs this very thread. Falls back to restoring the backlight directly.
+pub fn unblank_on_exit() {
+    if !deactivate() {
+        return;
+    }
+    match TRANSITION.try_lock_for(Duration::from_millis(1500)) {
+        Some(_transition) => restore("exit"),
+        None => {
+            let saved = STATE.lock().saved_brightness;
+            if let Some(level) = saved {
+                let _ = crate::system::display::set_brightness(level);
+            }
+            crate::log_warn!("SCREEN", "Exit while a blank was being set up; restored backlight only (marker kept)");
+        }
+    }
+}
+
+/// Undo what the last blank recorded. Caller holds TRANSITION; STATE is only taken for short reads.
+fn restore(reason: &str) {
+    let (changed_refresh, saved_brightness, hwnd, saved_mode) = {
+        let mut st = STATE.lock();
+        (
+            std::mem::take(&mut st.changed_refresh),
+            st.saved_brightness.take(),
+            st.hwnd,
+            st.saved_mode.take(),
+        )
+    };
     // Refresh rate first, still behind the black overlay, so the mode-switch flicker is not seen.
-    if std::mem::take(&mut st.changed_refresh) {
+    if changed_refresh {
         if let Err(e) = crate::system::display::reset_display_mode_to_registry() {
             crate::log_warn!("SCREEN", "Could not restore the display mode: {}", e);
         }
     }
-    let saved_brightness = st.saved_brightness.take();
     let brightness_ok = match saved_brightness {
         Some(level) => restore_brightness(level),
         None => true,
     };
-    if st.hwnd != 0 {
+    if hwnd != 0 {
         unsafe {
-            let _ = PostMessageW(HWND(st.hwnd as _), WM_CLOSE, WPARAM(0), LPARAM(0));
+            let _ = PostMessageW(HWND(hwnd as _), WM_CLOSE, WPARAM(0), LPARAM(0));
         }
     }
-    crate::system::switches::set_screen_off(false);
-
+    // Release the display hold unless a new blank has already started.
+    if !is_active() {
+        crate::system::switches::set_screen_off(false);
+    }
     // Power mode last; only if nobody changed it meanwhile, and never Beast/Custom on battery
     // (same guard as the set_power_mode command).
-    if let Some(mode) = st.saved_mode.take() {
+    if let Some(mode) = saved_mode {
         if let Some(ec) = crate::system::power_listener::global_ec() {
             let current = ec.lock().get_power_mode();
             let cfg = crate::system::config::load_config();
@@ -335,7 +428,6 @@ pub fn unblank(reason: &str) {
             }
         }
     }
-    drop(st);
     if brightness_ok {
         let _ = std::fs::remove_file(marker_path());
     }

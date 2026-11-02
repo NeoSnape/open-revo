@@ -27,7 +27,8 @@ static RELAUNCHING: AtomicBool = AtomicBool::new(false);
 /// Answer from the page to a "ui-ping" event.
 #[tauri::command]
 pub fn ui_pong(webview: tauri::WebviewWindow, seq: u64) {
-    if webview.label() == "main" {
+    // Only a ping we actually sent counts (a forged huge seq must not disable the check for good).
+    if webview.label() == "main" && seq <= PING_SEQ.load(Ordering::SeqCst) {
         PONG_SEQ.fetch_max(seq, Ordering::SeqCst);
     }
 }
@@ -67,7 +68,7 @@ pub fn show_main_checked(app: &AppHandle) {
         }
         let waited = start.elapsed().as_millis();
         let main = app.clone();
-        let _ = app.run_on_main_thread(move || {
+        let posted = app.run_on_main_thread(move || {
             CHECK_IN_FLIGHT.store(false, Ordering::SeqCst);
             if alive {
                 crate::log_debug!("WEBVIEW_HEALTH", "Main page answered ping in {}ms", waited);
@@ -83,6 +84,9 @@ pub fn show_main_checked(app: &AppHandle) {
                 relaunch(&main);
             }
         });
+        if posted.is_err() {
+            CHECK_IN_FLIGHT.store(false, Ordering::SeqCst);
+        }
     });
 }
 
@@ -120,7 +124,12 @@ fn relaunch(app: &AppHandle) {
 
 /// A relaunched instance waits for its predecessor to exit (single-instance lock, EC ownership).
 pub fn wait_for_previous_instance() {
+    wait_for_predecessor();
+    // The first-load deadline counts from here, not from before the wait for the old instance.
     let _ = PROCESS_START.set(Instant::now());
+}
+
+fn wait_for_predecessor() {
     let Some(pid) = std::env::args().find_map(|a| a.strip_prefix(WAIT_PID_ARG).and_then(|p| p.parse::<u32>().ok()))
     else {
         return;

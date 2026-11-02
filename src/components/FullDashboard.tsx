@@ -116,16 +116,9 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
     }
   }, [initialOpenCustomTuning]);
 
-  // Persistent Module Toggles (Safe-Mode Isolation)
+  // Module toggles: the backend side (plugin system) was removed in this fork, so every module stays
+  // enabled; kept as local state for the slot filter below.
   const [moduleToggles, setModuleToggles] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    invoke<Record<string, boolean>>('get_module_toggles')
-      .then((res) => {
-        if (res) setModuleToggles(res);
-      })
-      .catch((err) => console.warn('Failed to load module toggles:', err));
-  }, []);
 
   // Model Capabilities (Declarative Hardware Driver Contract)
   const realCapabilitiesRef = useRef<ModelCapabilities | undefined>(undefined);
@@ -193,14 +186,8 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
 
   // On non-dGPU machines, GPU tab remains accessible for display brightness & color tuning controls
 
-  const handleToggleModule = async (id: string, enabled: boolean) => {
+  const handleToggleModule = (id: string, enabled: boolean) => {
     setModuleToggles((prev) => ({ ...prev, [id]: enabled }));
-    try {
-      await invoke('set_module_enabled', { id, enabled });
-    } catch (e) {
-      console.error('Failed to update module toggle:', e);
-      setModuleToggles((prev) => ({ ...prev, [id]: !enabled }));
-    }
   };
 
   // Safe Mode fallback: if currently viewing a tab that got disabled, safely revert to overview

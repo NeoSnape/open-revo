@@ -163,7 +163,7 @@ export const POWER_MODES: ModeInfo[] = [
     id: 4,
     name: '自定义模式',
     nameEn: 'CUSTOM / PROFILE',
-    desc: '专属极客调优与风扇曲线，深度释放性能潜能',
+    desc: '专属功耗调优与风扇曲线，深度释放性能潜能',
     color: '#a855f7',
     accentClass: 'mode-custom',
     pl1: 75,

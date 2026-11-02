@@ -38,7 +38,7 @@ i7-14650HX + RTX 5070 Ti Laptop（65 W 底 + 50 W cTGP + 25 W DB）。
 `orv.exe`（`src-tauri/crates/orv`，独立 crate，普通权限运行）通过命名管道 `\\.\pipe\openrevo-cli`
 把命令交给正在运行的 OpenRevo 执行，走的是和界面按钮相同的函数，面板会同步刷新。
 管道只对当前用户、Administrators、SYSTEM 开放。没有按地址写 EC 的命令（只有 `ec read`），但 `orv call` 能调用界面的全部功能（含会写 EC 的调校命令）。
-**权限分级**：普通终端里的 orv 可以用查询和日常开关；会启动程序、读写任意路径、重启、管理服务、直接推调校数值的命令（服务端 `ELEVATED_ONLY` 列表 + 参数名含 path/file/dir/content/script 等的命令）只接受管理员终端里的 orv。否则同用户的任何普通程序都能借 OpenRevo 的管理员权限办事。
+**权限分级（白名单）**：普通终端里的 orv 只能用查询（`get_*`/`read_*`）和服务端 `UNELEVATED_ALLOWED` 列出的日常操作（切模式、强冷、刷新率、亮度、OSD、风扇曲线、应用已存配置、关屏/开屏、键盘灯、Win 锁等）；`orv gpu <模式>`（写主板 NVRAM、可能重启）和打开摄像头/麦克风也要管理员。其余命令（以后新增的也一样）一律要在管理员终端里运行，否则同用户的任何普通程序都能借 OpenRevo 的管理员权限办事。
 安装目录 `E:\OpenRevo-v0.9.3-portable` 已加入用户 PATH。
 
 | 命令 | 作用 |
