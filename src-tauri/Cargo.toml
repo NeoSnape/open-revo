@@ -13,6 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [workspace]
 members = [
     ".",
+    "crates/orv",
 ]
 
 [build-dependencies]
@@ -40,6 +41,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Power",
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_System_Com",
     "Win32_System_Ole",
     "Win32_System_Variant",

@@ -33,6 +33,35 @@ i7-14650HX + RTX 5070 Ti Laptop（65 W 底 + 50 W cTGP + 25 W DB）。
 - 空闲开销：机型配置/灯效契约缓存（上游每 500 ms 解析 340 KB JSON）、`schtasks` 查询缓存（上游每 1.5 s 启一次进程）、
   键盘钩子不再转发每个按键。
 
+## 命令行 `orv`
+
+`orv.exe`（`src-tauri/crates/orv`，独立 crate，普通权限运行）通过命名管道 `\.\pipe\openrevo-cli`
+把命令交给正在运行的 OpenRevo 执行，走的是和界面按钮相同的函数，面板会同步刷新。
+管道只对当前用户、Administrators、SYSTEM 开放；没有 EC 写入命令，只有 `ec read`。
+安装目录 `E:\OpenRevo-v0.9.3-portable` 已加入用户 PATH。
+
+| 命令 | 作用 |
+|---|---|
+| `orv status [--json] [--gpu]` | 状态一览；混合模式下默认不唤醒独显 |
+| `orv watch [秒]` | 持续刷新 |
+| `orv mode office\|balanced\|turbo\|custom [配置名]` | 切模式 |
+| `orv boost on\|off` | 一键强冷 |
+| `orv fan` / `orv fan policy tuned\|official` | EC 风扇表与是否已应用 / 切预设曲线 |
+| `orv profile list` / `orv profile apply <名>` | 自定义配置 |
+| `orv gpu [hybrid\|dgpu\|igpu --yes [--reboot]]` | 显卡模式 |
+| `orv hz <n>` | 刷新率 |
+| `orv awake on\|off` | 防休眠 |
+| `orv screen off` | 仅关闭屏幕 |
+| `orv osd on\|off` | RTSS OSD |
+| `orv light on\|off\|<亮度>` | 键盘灯 |
+| `orv lock win\|fn on\|off`、`orv wifi\|bluetooth\|touchpad\|camera\|mic on\|off` | 开关 |
+| `orv switches` | 各开关状态 |
+| `orv ec read <地址> [长度]` | EC 只读 |
+| `orv log [行数]` | 最近日志 |
+
+构建：`cargo build --release -p orv`（在 `src-tauri` 下）。它不能放进主 crate 的 `src/bin`：
+tauri-build 会把 requireAdministrator 清单嵌进主 crate 的所有可执行文件。
+
 ## 已知限制
 
 - **充电上限无效**（2026-10-31 实测）：EC 里写入上限 60 / 下限 40 / 模式 0x21 后读回正确，但仍充到 100%。

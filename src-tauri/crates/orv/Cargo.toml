@@ -1,0 +1,11 @@
+[package]
+name = "orv"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line remote for the running OpenRevo"
+
+# Separate crate on purpose: tauri-build embeds the requireAdministrator manifest into every
+# binary of the app crate, and orv must run unelevated.
+
+[dependencies]
+serde_json = "1.0"
