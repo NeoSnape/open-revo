@@ -44,7 +44,7 @@ fn call(cmd: &str, args: Value) -> Value {
         match std::fs::OpenOptions::new().read(true).write(true).open(PIPE) {
             Ok(f) => break f,
             Err(e) => match e.raw_os_error() {
-                Some(231) if tries < 40 => {
+                Some(231) if tries < 200 => {
                     tries += 1;
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
@@ -216,7 +216,11 @@ fn generic_call(pos: &[&String], json_out: bool) {
     let name = pos.get(1).map(|s| s.as_str()).unwrap_or_else(|| die("用法: orv call <命令> [参数=值 ...]", 2));
     let rest: Vec<&str> = pos[2..].iter().map(|s| s.as_str()).collect();
     let args = if rest.len() == 1 && rest[0].trim_start().starts_with('{') {
-        serde_json::from_str(rest[0]).unwrap_or_else(|e| die(&format!("JSON 参数无效: {}", e), 2))
+        let v: Value = serde_json::from_str(rest[0]).unwrap_or_else(|e| die(&format!("JSON 参数无效: {}", e), 2));
+        match v {
+            Value::Object(m) => Value::Object(m.into_iter().map(|(k, v)| (camel(&k), v)).collect()),
+            _ => die("JSON 参数必须是对象 {...}", 2),
+        }
     } else {
         let mut m = serde_json::Map::new();
         for kv in rest {

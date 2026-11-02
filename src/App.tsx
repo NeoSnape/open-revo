@@ -292,7 +292,7 @@ export default function App() {
       invoke('ui_pong', { seq: event.payload }).catch(() => {});
     }).then((un) => {
       unlistenPing = un;
-    });
+    }).catch(() => {});
 
     // Responsive hardware state event bus subscription (zero polling overhead)
     let unlistenTelemetry: (() => void) | undefined;

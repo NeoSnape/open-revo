@@ -124,7 +124,37 @@ fn to_value<T: serde::Serialize>(v: T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
 }
 
-fn dispatch(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, String> {
+/// Commands an unelevated client may not reach through `invoke`: they launch programs, read or write
+/// arbitrary paths, reboot, manage services/tasks, or push raw tuning values. The pipe is open to every
+/// process of this user, and OpenRevo runs elevated, so without this any medium-integrity program
+/// could use OpenRevo to act as administrator (e.g. trigger_shortcut_action LaunchApp).
+const ELEVATED_ONLY: &[&str] = &[
+    "reboot_computer", "clear_user_data_dir", "migrate_user_data_dir", "register_custom_shortcut",
+    "unregister_custom_shortcut", "trigger_shortcut_action", "toggle_oem_service", "emergency_hard_unlock_gpu",
+    "save_app_config", "set_autostart_enabled", "save_custom_brfx", "apply_custom_brfx_script",
+    "delete_custom_color_profile", "apply_color_profile", "apply_custom_profile", "apply_live_custom_tweak",
+    "apply_gpu_tuning_state", "apply_lighting_hardware_override", "set_bld_fan_speed_cap", "apply_fan_curve_live",
+    "save_profile_preset", "create_profile_preset", "rename_profile_preset", "delete_profile_preset",
+    "reset_profile_preset", "set_battery_hardware_limit", "set_experimental_igpu_unlock", "set_cpu_safety_guard",
+    "heal_cpu_power_contract", "heal_gpu_power_contract", "reload_model_profiles", "set_log_filter",
+];
+const ELEVATED_PREFIXES: &[&str] = &["open_", "import_", "export_"];
+/// Parameter names that carry paths, file contents, scripts or arbitrary structures.
+const RISKY_PARAMS: &[&str] = &["path", "file", "dir", "content", "bytes", "script", "binding", "action", "cfg"];
+
+fn needs_elevation(entry: &Value) -> bool {
+    let name = entry["name"].as_str().unwrap_or("");
+    ELEVATED_ONLY.contains(&name)
+        || ELEVATED_PREFIXES.iter().any(|p| name.starts_with(p))
+        || entry["params"].as_array().map_or(false, |ps| {
+            ps.iter().any(|p| {
+                let n = p["name"].as_str().unwrap_or("").to_lowercase();
+                RISKY_PARAMS.iter().any(|r| n.contains(r))
+            })
+        })
+}
+
+fn dispatch(app: &AppHandle, cmd: &str, args: &Value, client_elevated: bool) -> Result<Value, String> {
     use crate::commands::*;
     let ec = || app.state::<SharedEcBridge>();
     let gpu = || app.state::<SharedGpuBridge>();
@@ -138,8 +168,15 @@ fn dispatch(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, String> {
         "invoke" => {
             let command = arg_str(args, "command")?.to_string();
             let known: Value = serde_json::from_str(catalog::COMMAND_CATALOG).unwrap_or(Value::Null);
-            if !known.as_array().map_or(false, |a| a.iter().any(|c| c["name"] == command)) {
-                return Err(format!("unknown command '{}' (see `orv commands`)", command));
+            let entry = known
+                .as_array()
+                .and_then(|a| a.iter().find(|c| c["name"] == command))
+                .ok_or_else(|| format!("unknown command '{}' (see `orv commands`)", command))?;
+            if !client_elevated && needs_elevation(entry) {
+                return Err(format!(
+                    "'{}' can only be run from an administrator terminal (it can launch programs, touch files or push raw tuning values)",
+                    command
+                ));
             }
             let payload = args.get("args").cloned().unwrap_or_else(|| json!({}));
             let result = invoke_like_frontend(app, &command, payload)?;
@@ -257,7 +294,7 @@ fn dispatch(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, String> {
         "ec_read" => {
             let addr = args.get("addr").and_then(|v| v.as_u64()).ok_or("missing argument 'addr'")?;
             let len = args.get("len").and_then(|v| v.as_u64()).unwrap_or(1).clamp(1, 256);
-            if addr + len > 0x10000 {
+            if addr.checked_add(len).map_or(true, |end| end > 0x10000) {
                 return Err("address range beyond 0xFFFF".into());
             }
             let addrs: Vec<u16> = (0..len).map(|i| (addr + i) as u16).collect();
@@ -289,7 +326,15 @@ fn invoke_like_frontend(app: &AppHandle, command: &str, payload: Value) -> Resul
         invoke_key: app.invoke_key().to_string(),
     };
     let (tx, rx) = std::sync::mpsc::channel::<Result<Value, String>>();
+    // On timeout the queued call is cancelled if it has not started yet, so a late run can't surprise a script.
+    let started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (started_in, cancelled_in) = (started.clone(), cancelled.clone());
     app.run_on_main_thread(move || {
+        if cancelled_in.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        started_in.store(true, std::sync::atomic::Ordering::SeqCst);
         window.on_message(
             request,
             Box::new(move |_webview, _cmd, response, _cb, _err| {
@@ -306,11 +351,20 @@ fn invoke_like_frontend(app: &AppHandle, command: &str, payload: Value) -> Resul
         );
     })
     .map_err(|e| format!("main thread dispatch failed: {}", e))?;
-    rx.recv_timeout(std::time::Duration::from_secs(60))
-        .map_err(|_| format!("'{}' did not answer within 60 s", command))?
+    match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+        Ok(r) => r,
+        Err(_) => {
+            cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+            if started.load(std::sync::atomic::Ordering::SeqCst) {
+                Err(format!("'{}' is still running after 60 s; its result is unknown", command))
+            } else {
+                Err(format!("'{}' was not started within 60 s (main thread busy) and has been cancelled", command))
+            }
+        }
+    }
 }
 
-fn handle(app: &AppHandle, line: &str) -> Value {
+fn handle(app: &AppHandle, line: &str, client_elevated: bool) -> Value {
     let req: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(e) => return json!({ "ok": false, "error": format!("bad request: {}", e) }),
@@ -323,9 +377,14 @@ fn handle(app: &AppHandle, line: &str) -> Value {
         && !(cmd == "gpu" && args.get("mode").is_none())
         && !read_only_invoke
     {
-        crate::log_info!("CLI", "orv {} {}", cmd, args);
+        let mut shown = args.to_string();
+        if shown.len() > 300 {
+            shown.truncate(shown.char_indices().nth(300).map_or(shown.len(), |(i, _)| i));
+            shown.push_str("...");
+        }
+        crate::log_info!("CLI", "orv {} {}{}", cmd, shown, if client_elevated { " (elevated)" } else { "" });
     }
-    match dispatch(app, cmd, &args) {
+    match dispatch(app, cmd, &args, client_elevated) {
         Ok(data) => json!({ "ok": true, "data": data }),
         Err(e) => {
             crate::log_warn!("CLI", "orv {} failed: {}", cmd, e);
@@ -335,28 +394,117 @@ fn handle(app: &AppHandle, line: &str) -> Value {
 }
 
 #[cfg(windows)]
+fn client_is_elevated(pipe: windows::Win32::Foundation::HANDLE) -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::System::Pipes::GetNamedPipeClientProcessId;
+    use windows::Win32::System::Threading::{OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        let mut pid = 0u32;
+        if GetNamedPipeClientProcessId(pipe, &mut pid).is_err() {
+            return false;
+        }
+        let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return false };
+        let mut token = Default::default();
+        let ok = OpenProcessToken(process, TOKEN_QUERY, &mut token).is_ok();
+        let _ = CloseHandle(process);
+        if !ok {
+            return false;
+        }
+        let mut elevation = TOKEN_ELEVATION::default();
+        let mut len = 0u32;
+        let res = GetTokenInformation(
+            token,
+            TokenElevation,
+            Some(&mut elevation as *mut _ as *mut _),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut len,
+        );
+        let _ = CloseHandle(token);
+        res.is_ok() && elevation.TokenIsElevated != 0
+    }
+}
+
+/// Serve one connected client on its own thread. Reads are non-blocking (PeekNamedPipe) with a 5 s
+/// deadline, so a client that connects and never sends a line only ties up its own slot briefly.
+#[cfg(windows)]
+fn serve_client(app: AppHandle, pipe_raw: isize) {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Storage::FileSystem::{FlushFileBuffers, ReadFile, WriteFile};
+    use windows::Win32::System::Pipes::{DisconnectNamedPipe, PeekNamedPipe};
+    let pipe = HANDLE(pipe_raw as _);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut req = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let mut complete = false;
+    while std::time::Instant::now() < deadline && req.len() <= 64 * 1024 {
+        let mut avail = 0u32;
+        if unsafe { PeekNamedPipe(pipe, None, 0, None, Some(&mut avail), None) }.is_err() {
+            break; // client went away
+        }
+        if avail == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            continue;
+        }
+        let want = (avail as usize).min(chunk.len());
+        let mut n = 0u32;
+        if unsafe { ReadFile(pipe, Some(&mut chunk[..want]), Some(&mut n), None) }.is_err() || n == 0 {
+            break;
+        }
+        req.extend_from_slice(&chunk[..n as usize]);
+        if req.contains(&b'\n') {
+            complete = true;
+            break;
+        }
+    }
+    if complete {
+        let elevated = client_is_elevated(pipe);
+        let line = String::from_utf8_lossy(&req);
+        let resp = handle(&app, line.lines().next().unwrap_or(""), elevated);
+        let mut out = resp.to_string().into_bytes();
+        out.push(b'\n');
+        let mut written = 0u32;
+        unsafe {
+            let _ = WriteFile(pipe, Some(&out), Some(&mut written), None);
+            let _ = FlushFileBuffers(pipe);
+        }
+    } else {
+        crate::log_warn!("CLI", "Dropped a client that sent no complete request within 5 s");
+    }
+    unsafe {
+        let _ = DisconnectNamedPipe(pipe);
+        let _ = CloseHandle(pipe);
+    }
+}
+
+#[cfg(windows)]
 fn serve(app: AppHandle) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::Foundation::{CloseHandle, LocalFree, ERROR_PIPE_CONNECTED, HLOCAL};
     use windows::Win32::Security::Authorization::{
         ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
     };
     use windows::Win32::Security::{GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER};
-    use windows::Win32::Storage::FileSystem::{FlushFileBuffers, ReadFile, WriteFile, PIPE_ACCESS_DUPLEX};
+    use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
     use windows::Win32::System::Pipes::{
-        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
-        PIPE_WAIT,
+        ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
+        PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
     };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
+    const MAX_CLIENTS: usize = 4;
+    static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+
     // DACL: SYSTEM, Administrators and the user this process runs as (the logged-in user; elevated via the task).
+    // What an unelevated client may do is limited per command (see ELEVATED_ONLY).
     let sddl = unsafe {
         let mut token = Default::default();
         let mut user_sid = String::new();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_ok() {
-            let mut buf = vec![0u8; 256];
+            let mut buf = vec![0u64; 64]; // u64 storage keeps TOKEN_USER aligned
             let mut len = 0u32;
-            if GetTokenInformation(token, TokenUser, Some(buf.as_mut_ptr() as *mut _), buf.len() as u32, &mut len).is_ok() {
+            if GetTokenInformation(token, TokenUser, Some(buf.as_mut_ptr() as *mut _), (buf.len() * 8) as u32, &mut len).is_ok() {
                 let tu = &*(buf.as_ptr() as *const TOKEN_USER);
                 let mut s = windows::core::PWSTR::null();
                 if ConvertSidToStringSidW(tu.User.Sid, &mut s).is_ok() {
@@ -366,12 +514,16 @@ fn serve(app: AppHandle) {
             }
             let _ = CloseHandle(token);
         }
+        if user_sid.is_empty() {
+            crate::log_warn!("CLI", "Could not resolve the current user's SID; only elevated clients can use orv");
+        }
         let mut d = String::from("D:P(A;;GA;;;SY)(A;;GA;;;BA)");
         if !user_sid.is_empty() {
             d.push_str(&format!("(A;;GA;;;{})", user_sid));
         }
         d
     };
+    // Lives for the whole process: every pipe instance is created with it.
     let mut psd = PSECURITY_DESCRIPTOR::default();
     if unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(&HSTRING::from(sddl.as_str()), SDDL_REVISION_1, &mut psd, None) }
         .is_err()
@@ -393,7 +545,7 @@ fn serve(app: AppHandle) {
                 PCWSTR(name.as_ptr()),
                 PIPE_ACCESS_DUPLEX,
                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                1,
+                PIPE_UNLIMITED_INSTANCES,
                 64 * 1024,
                 64 * 1024,
                 0,
@@ -409,33 +561,32 @@ fn serve(app: AppHandle) {
             Ok(()) => true,
             Err(e) => e.code() == ERROR_PIPE_CONNECTED.to_hresult(),
         };
-        if connected {
-            // Read one request line (bounded).
-            let mut req = Vec::new();
-            let mut chunk = [0u8; 4096];
-            loop {
-                let mut n = 0u32;
-                if unsafe { ReadFile(pipe, Some(&mut chunk), Some(&mut n), None) }.is_err() || n == 0 {
-                    break;
-                }
-                req.extend_from_slice(&chunk[..n as usize]);
-                if req.contains(&b'\n') || req.len() > 64 * 1024 {
-                    break;
-                }
-            }
-            let line = String::from_utf8_lossy(&req);
-            let resp = handle(&app, line.lines().next().unwrap_or(""));
-            let mut out = resp.to_string().into_bytes();
-            out.push(b'\n');
-            let mut written = 0u32;
+        if !connected {
             unsafe {
-                let _ = WriteFile(pipe, Some(&out), Some(&mut written), None);
-                let _ = FlushFileBuffers(pipe);
-                let _ = DisconnectNamedPipe(pipe);
+                let _ = CloseHandle(pipe);
             }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            continue;
         }
-        unsafe {
-            let _ = CloseHandle(pipe);
+        if IN_FLIGHT.fetch_add(1, Ordering::SeqCst) >= MAX_CLIENTS {
+            IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+            unsafe {
+                let _ = CloseHandle(pipe);
+            }
+            continue;
+        }
+        // Hand the connection off and immediately listen again.
+        let app = app.clone();
+        let raw = pipe.0 as isize;
+        let spawned = std::thread::Builder::new().name("openrevo-cli-client".into()).spawn(move || {
+            serve_client(app, raw);
+            IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        });
+        if spawned.is_err() {
+            IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+            unsafe {
+                let _ = CloseHandle(pipe);
+            }
         }
     }
 }

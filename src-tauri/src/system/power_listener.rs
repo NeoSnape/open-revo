@@ -164,6 +164,11 @@ unsafe extern "system" fn power_wnd_proc(
         WM_POWERBROADCAST => {
             let pbt = wparam.0 as u32;
             if pbt == PBT_APMSUSPEND {
+                // Going to standby anyway (lid / power button): end a screen blank so the panel is not
+                // left at 0 % behind a lock screen on resume.
+                if crate::system::screen_blank::is_active() {
+                    std::thread::spawn(|| crate::system::screen_blank::unblank("standby"));
+                }
                 // If Keep-Awake is active or screen was turned off for overnight tasks,
                 // NEVER degrade power mode to Office (1) and NEVER shut down water cooling!
                 let is_running_tasks = crate::system::switches::is_keep_awake() || crate::system::switches::is_screen_off();

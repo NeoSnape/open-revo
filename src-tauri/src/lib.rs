@@ -108,9 +108,8 @@ pub fn run() {
     let single_instance_plugin = crate::system::boot_trace::boot_scope("Step 5: SingleInstance Plugin", || {
         tauri_plugin_single_instance::init(|app, argv, _cwd| {
             crate::system::boot_trace::boot_log("SINGLE_INST", &format!("Another instance attempted launch with args: {:?}", argv));
-            if let Some(window) = crate::system::window::ensure_window_alive(app) {
-                crate::system::window::restore_and_sync_window(&window);
-            }
+            // Same liveness check as the tray click: a dead WebView2 relaunches instead of showing an empty frame.
+            crate::system::webview_health::show_main_checked(app);
         })
     });
 
@@ -341,6 +340,7 @@ pub fn run() {
             crate::system::telemetry::start_status_logger(ec_for_status, gpu_for_status);
             crate::system::rtss_osd::start(ec_for_rtss, gpu_for_rtss);
             crate::system::rtss_frametime::start();
+            crate::system::screen_blank::recover_after_crash();
             crate::system::cli_server::start(app.handle().clone());
 
             // Step 6.11: Start adaptive dynamic telemetry heartbeat broadcaster
@@ -368,6 +368,7 @@ pub fn run() {
         .run(|_app_handle, event| {
             if let tauri::RunEvent::Exit = event {
                 println!("[OpenRevo] Process exiting. Executing clean webview shutdown and hardware safety shutdown...");
+                crate::system::screen_blank::unblank("exit");
                 crate::system::webview_orchestrator::WebviewOrchestrator::global().safe_shutdown_all_subviews();
                 crate::system::tray::safe_hardware_shutdown_on_exit();
                 crate::system::rtss_osd::release_now();

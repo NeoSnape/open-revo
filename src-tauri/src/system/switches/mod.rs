@@ -53,7 +53,8 @@ pub fn turn_off_screen() -> Result<(), String> {
 }
 
 pub fn turn_on_screen() {
-    crate::system::screen_blank::unblank("command");
+    // Restoring takes up to ~1 s (display mode, backlight read-back); keep callers responsive.
+    std::thread::spawn(|| crate::system::screen_blank::unblank("command"));
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

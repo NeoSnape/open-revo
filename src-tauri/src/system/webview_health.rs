@@ -11,6 +11,13 @@ use tauri::{AppHandle, Emitter, Manager};
 
 const WAIT_PID_ARG: &str = "--wait-pid=";
 const PONG_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Two missed pings in a row (3 s total) before declaring the WebView dead, so a page that is merely
+/// slow (e.g. right after resume from standby) is not torn down.
+const PING_ATTEMPTS: u32 = 2;
+/// If the page never completed its first handshake within this time, the WebView died while loading.
+const FIRST_LOAD_DEADLINE: Duration = Duration::from_secs(45);
+
+static PROCESS_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
 static PING_SEQ: AtomicU64 = AtomicU64::new(0);
 static PONG_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -27,9 +34,14 @@ pub fn ui_pong(webview: tauri::WebviewWindow, seq: u64) {
 
 /// Tray click: show the main window if its page is alive, otherwise relaunch OpenRevo.
 pub fn show_main_checked(app: &AppHandle) {
-    // Before the first handshake the page has no listener yet; keep the old behaviour.
+    // Before the first handshake the page has no ping listener yet. Shortly after start that just
+    // means "still loading"; long after start it means the WebView died during the first load.
     if !crate::system::boot_trace::is_boot_completed() {
-        if let Some(window) = app.get_webview_window("main") {
+        let uptime = PROCESS_START.get().map_or(Duration::ZERO, |t| t.elapsed());
+        if uptime > FIRST_LOAD_DEADLINE {
+            crate::log_warn!("WEBVIEW_HEALTH", "Page never finished loading ({}s after start); relaunching", uptime.as_secs());
+            relaunch(app);
+        } else if let Some(window) = app.get_webview_window("main") {
             crate::system::window::restore_and_sync_window(&window);
         }
         return;
@@ -37,15 +49,22 @@ pub fn show_main_checked(app: &AppHandle) {
     if CHECK_IN_FLIGHT.swap(true, Ordering::SeqCst) {
         return;
     }
-    let seq = PING_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
-    let _ = app.emit_to("main", "ui-ping", seq);
     let app = app.clone();
     std::thread::spawn(move || {
         let start = Instant::now();
-        while PONG_SEQ.load(Ordering::SeqCst) < seq && start.elapsed() < PONG_TIMEOUT {
-            std::thread::sleep(Duration::from_millis(10));
+        let mut alive = false;
+        for _ in 0..PING_ATTEMPTS {
+            let seq = PING_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+            let _ = app.emit_to("main", "ui-ping", seq);
+            let attempt = Instant::now();
+            while PONG_SEQ.load(Ordering::SeqCst) < seq && attempt.elapsed() < PONG_TIMEOUT {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if PONG_SEQ.load(Ordering::SeqCst) >= seq {
+                alive = true;
+                break;
+            }
         }
-        let alive = PONG_SEQ.load(Ordering::SeqCst) >= seq;
         let waited = start.elapsed().as_millis();
         let main = app.clone();
         let _ = app.run_on_main_thread(move || {
@@ -89,8 +108,7 @@ fn relaunch(app: &AppHandle) {
     match std::process::Command::new(&exe).args(&args).spawn() {
         Ok(child) => {
             crate::log_info!("WEBVIEW_HEALTH", "Spawned replacement instance (pid {}) with args {:?}", child.id(), args);
-            crate::system::webview_orchestrator::WebviewOrchestrator::global().safe_shutdown_all_subviews();
-            crate::system::tray::safe_hardware_shutdown_on_exit();
+            // RunEvent::Exit runs the usual shutdown (subviews, hardware handover, screen restore).
             app.exit(0);
         }
         Err(e) => {
@@ -102,6 +120,7 @@ fn relaunch(app: &AppHandle) {
 
 /// A relaunched instance waits for its predecessor to exit (single-instance lock, EC ownership).
 pub fn wait_for_previous_instance() {
+    let _ = PROCESS_START.set(Instant::now());
     let Some(pid) = std::env::args().find_map(|a| a.strip_prefix(WAIT_PID_ARG).and_then(|p| p.parse::<u32>().ok()))
     else {
         return;
@@ -109,9 +128,17 @@ pub fn wait_for_previous_instance() {
     #[cfg(windows)]
     unsafe {
         use windows::Win32::Foundation::CloseHandle;
-        use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
-        if let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
-            let _ = WaitForSingleObject(h, 10_000);
+        use windows::Win32::Foundation::WAIT_TIMEOUT;
+        use windows::Win32::System::Threading::{
+            OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+        };
+        // If the old instance is still alive after 30 s its shutdown is stuck; end it, otherwise the
+        // single-instance mutex makes this new instance exit and nothing would be left running.
+        if let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, false, pid) {
+            if WaitForSingleObject(h, 30_000) == WAIT_TIMEOUT {
+                let _ = TerminateProcess(h, 1);
+                let _ = WaitForSingleObject(h, 5_000);
+            }
             let _ = CloseHandle(h);
         }
     }

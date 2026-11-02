@@ -376,6 +376,35 @@ pub fn set_refresh_rate(hz: u32) -> Result<(), String> {
     }
 }
 
+/// Change the primary display refresh rate for this session only (not written to the registry),
+/// so a crash or reboot comes back at the user's own rate. Undo with `reset_display_mode_to_registry`.
+pub fn set_refresh_rate_temporary(hz: u32) -> Result<(), String> {
+    unsafe {
+        let mut dm: DEVMODEA = std::mem::zeroed();
+        dm.dmSize = std::mem::size_of::<DEVMODEA>() as u16;
+        if EnumDisplaySettingsA(None, ENUM_CURRENT_SETTINGS, &mut dm).as_bool() {
+            dm.dmDisplayFrequency = hz;
+            dm.dmFields |= DM_DISPLAYFREQUENCY;
+            let res = ChangeDisplaySettingsA(Some(&dm), windows::Win32::Graphics::Gdi::CDS_TYPE(0));
+            if res.0 == 0 {
+                return Ok(());
+            }
+            return Err(format!("ChangeDisplaySettings failed with code: {}", res.0));
+        }
+        Err("EnumDisplaySettings failed to get current settings".into())
+    }
+}
+
+/// Return the primary display to the mode stored in the registry (undoes a temporary change).
+pub fn reset_display_mode_to_registry() -> Result<(), String> {
+    let res = unsafe { ChangeDisplaySettingsA(None, windows::Win32::Graphics::Gdi::CDS_TYPE(0)) };
+    if res.0 == 0 {
+        Ok(())
+    } else {
+        Err(format!("ChangeDisplaySettings(reset) failed with code: {}", res.0))
+    }
+}
+
 /// Enumerate all available refresh rates supported on primary display
 pub fn get_available_refresh_rates() -> Vec<u32> {
     unsafe {

@@ -454,14 +454,16 @@ fn generate_command_catalog() {
     let registered: std::collections::HashSet<String> = lib
         .find("generate_handler![")
         .map(|i| {
-            let block = &lib[i..i + lib[i..].find("])").unwrap_or(0)];
+            let end = lib[i..].find("])").expect("build.rs: end of generate_handler![ ... ]) not found in lib.rs");
+            let block = &lib[i..i + end];
             block
                 .split(',')
                 .filter_map(|t| t.trim().rsplit("::").next().map(|n| n.trim().to_string()))
                 .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
                 .collect()
         })
-        .unwrap_or_default();
+        .expect("build.rs: generate_handler![ not found in lib.rs");
+    assert!(registered.len() > 50, "build.rs: only {} commands parsed from generate_handler!", registered.len());
 
     let mut entries = Vec::new();
     let mut stack = vec![Path::new("src").to_path_buf()];
@@ -524,6 +526,10 @@ fn generate_command_catalog() {
                         }))
                     })
                     .collect();
+                // Legacy aliases (snake_case + camelCase of the same arg) collapse to one camelCase name.
+                let mut seen = std::collections::HashSet::new();
+                let params: Vec<serde_json::Value> =
+                    params.into_iter().filter(|p| seen.insert(p["name"].as_str().unwrap_or("").to_string())).collect();
                 if registered.contains(&name) {
                     entries.push(serde_json::json!({ "name": name, "module": module, "params": params }));
                 }

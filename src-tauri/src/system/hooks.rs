@@ -23,6 +23,11 @@ extern "system" {
 static WIN_KEY_LOCKED: AtomicBool = AtomicBool::new(false);
 static WIN_PHYSICALLY_DOWN: AtomicBool = AtomicBool::new(false);
 static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+
+/// True while the low-level keyboard hook thread is installed and running.
+pub fn is_keyboard_hook_alive() -> bool {
+    HOOK_THREAD_ID.load(Ordering::SeqCst) != 0
+}
 static HOOK_STATE_LOCK: Mutex<()> = Mutex::new(());
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 

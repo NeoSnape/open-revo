@@ -171,15 +171,10 @@ pub fn dispatch_action(app: AppHandle, binding: ShortcutBinding) {
                 simulate_win32_key(0xAF); // VK_VOLUME_UP
             }
 
-            // 10. Turn Monitor Off (Low Power Sleep)
+            // 10. Turn Monitor Off: same black-overlay blank as the button (a real display power-off
+            // is the Modern Standby trigger on this machine and would suspend everything).
             ShortcutAction::MonitorOff => {
-                #[cfg(target_os = "windows")]
-                unsafe {
-                    use windows::Win32::Foundation::{LPARAM, WPARAM};
-                    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, HWND_BROADCAST, WM_SYSCOMMAND};
-                    const SC_MONITORPOWER: usize = 0xF170;
-                    let _ = PostMessageW(HWND_BROADCAST, WM_SYSCOMMAND, WPARAM(SC_MONITORPOWER), LPARAM(2));
-                }
+                let _ = crate::system::switches::turn_off_screen();
             }
 
             // 11. Lock Workstation
