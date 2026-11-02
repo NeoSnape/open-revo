@@ -30,6 +30,11 @@ static IS_LISTENING: AtomicBool = AtomicBool::new(false);
 static POWER_WATCHER_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 static GLOBAL_EC: parking_lot::RwLock<Option<crate::driver::ec_bridge::SharedEcBridge>> = parking_lot::RwLock::new(None);
 
+/// The EC bridge handed to the power watcher at boot (None before that).
+pub fn global_ec() -> Option<crate::driver::ec_bridge::SharedEcBridge> {
+    GLOBAL_EC.read().clone()
+}
+
 pub fn init_power_event_watcher(ec: crate::driver::ec_bridge::SharedEcBridge) {
     *GLOBAL_EC.write() = Some(ec);
     start_power_event_watcher();
