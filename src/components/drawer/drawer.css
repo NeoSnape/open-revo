@@ -39,10 +39,7 @@
         /* 迷你插槽区域标记 (可被第三方皮肤任意 CSS Grid/Flex order 重排) */
         .mini-slot-header { grid-area: header; }
         .mini-slot-power { grid-area: power; }
-        .mini-slot-gpu { grid-area: gpu; }
         .mini-slot-display { grid-area: display; }
-        .mini-slot-lighting { grid-area: lighting; }
-        .mini-slot-battery { grid-area: battery; }
         .mini-slot-switches { grid-area: switches; }
         .mini-slot-footer { grid-area: footer; }
 

@@ -8,12 +8,15 @@ interface DrawerDisplayCardProps {
   status: HardwareState;
   onSwitchRefreshRate: (hz: number, persist?: boolean) => void;
   checkOemGuard: (action: () => void) => void;
+  /** The mini panel hides the refresh-rate row and keeps only brightness. */
+  showRefreshRate?: boolean;
 }
 
 export const DrawerDisplayCard: React.FC<DrawerDisplayCardProps> = ({
   status,
   onSwitchRefreshRate,
   checkOemGuard,
+  showRefreshRate = true,
 }) => {
   const [showHzMenu, setShowHzMenu] = useState(false);
   const [selectedMonIdx, setSelectedMonIdx] = useState(0);
@@ -156,6 +159,7 @@ export const DrawerDisplayCard: React.FC<DrawerDisplayCardProps> = ({
       {/* =========================================================
           第 3 排：屏幕刷新率 (多显示器自适应，四个按钮严格各占 1/4)
           ========================================================= */}
+      {showRefreshRate && (
       <div className="m-card" style={{ position: 'relative', zIndex: showMonMenu ? 200 : 1 }}>
         <div className="m-card-header" style={{ position: 'relative', zIndex: 10 }}>
           <div className="m-header-left">
@@ -306,6 +310,8 @@ export const DrawerDisplayCard: React.FC<DrawerDisplayCardProps> = ({
           </div>
         </div>
       </div>
+
+      )}
 
       {/* =========================================================
           第 4 排：屏幕亮度

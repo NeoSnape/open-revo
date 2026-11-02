@@ -130,7 +130,7 @@ export const DrawerQuickSwitches: React.FC<DrawerQuickSwitchesProps> = ({
           title={switches.camera ? '摄像头已供电开启 (点击硬件断电禁用)' : '摄像头已硬件断电禁用 (点击开启)'}
         >
           {switches.camera ? <Camera size={16} /> : <CameraOff size={16} />}
-          <span className="m-quick-btn-label">{switches.camera ? '摄像头' : '相机已关'}</span>
+          <span className="m-quick-btn-label">摄像头</span>
         </button>
 
         {/* 3. 麦克风开关 */}
@@ -140,7 +140,7 @@ export const DrawerQuickSwitches: React.FC<DrawerQuickSwitchesProps> = ({
           title={switches.mic ? '麦克风已就绪拾音 (点击一键静音)' : '麦克风已一键静音 (点击解除)'}
         >
           {switches.mic ? <Mic size={16} /> : <MicOff size={16} />}
-          <span className="m-quick-btn-label">{switches.mic ? '麦克风' : '麦克静音'}</span>
+          <span className="m-quick-btn-label">{switches.mic ? '麦克风' : '麦克风静音'}</span>
         </button>
 
         {/* 4. Win 键锁 */}
@@ -150,7 +150,7 @@ export const DrawerQuickSwitches: React.FC<DrawerQuickSwitchesProps> = ({
           title={status.win_key_locked ? 'Windows 徽标键已锁定防误触 (点击解锁)' : 'Windows 徽标键未锁定 (点击锁定)'}
         >
           {status.win_key_locked ? <Lock size={16} /> : <Unlock size={16} />}
-          <span className="m-quick-btn-label">{status.win_key_locked ? 'Win已锁' : 'Win键锁'}</span>
+          <span className="m-quick-btn-label">Win键锁</span>
         </button>
 
         {/* 5. 防休眠 */}
@@ -160,7 +160,7 @@ export const DrawerQuickSwitches: React.FC<DrawerQuickSwitchesProps> = ({
           title={switches.keep_awake ? '防休眠模式已开启 (保持系统常亮不锁屏)' : '防休眠模式已关闭 (遵循系统电源计划)'}
         >
           <Coffee size={16} />
-          <span className="m-quick-btn-label">{switches.keep_awake ? '常亮保持' : '防休眠'}</span>
+          <span className="m-quick-btn-label">防休眠</span>
         </button>
 
         {/* 6. 关闭屏幕（黑屏不待机，按键恢复） */}

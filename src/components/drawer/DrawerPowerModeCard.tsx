@@ -31,7 +31,7 @@ export const DrawerPowerModeCard: React.FC<DrawerPowerModeCardProps> = ({
       case 3:
         return '狂暴模式';
       case 4:
-        return hasCustomMode ? '极客自定义调校' : '均衡模式';
+        return hasCustomMode ? '自定义模式' : '均衡模式';
       default:
         return '均衡模式';
     }
@@ -119,7 +119,7 @@ export const DrawerPowerModeCard: React.FC<DrawerPowerModeCardProps> = ({
               >
                 <Flame size={14} />
                 <span style={{ fontSize: '10.5px', fontWeight: 600 }}>
-                  {isRestricted ? '狂暴 (需电源)' : '狂暴'}
+                  {isRestricted ? '狂暴 (需圆口DC)' : '狂暴'}
                 </span>
               </button>
 
@@ -148,8 +148,8 @@ export const DrawerPowerModeCard: React.FC<DrawerPowerModeCardProps> = ({
                     isRestricted
                       ? '电池供电或受限供电下不可用，需接入原装电源适配器'
                       : status.power_mode === 4
-                      ? '已激活极客模式，再次点击打开高级调校大面板'
-                      : '切换为极客自定义模式'
+                      ? '已激活自定义模式，再次点击打开调校大面板'
+                      : '切换为自定义模式'
                   }
                   onClick={() => {
                     if (isRestricted) return;
@@ -164,7 +164,7 @@ export const DrawerPowerModeCard: React.FC<DrawerPowerModeCardProps> = ({
                 >
                   <Sliders size={14} />
                   <span style={{ fontSize: '10.5px', fontWeight: 600 }}>
-                    {isRestricted ? '极客 (需电源)' : '极客调校'}
+                    {isRestricted ? '自定义 (需圆口DC)' : '自定义'}
                   </span>
                 </button>
               )}

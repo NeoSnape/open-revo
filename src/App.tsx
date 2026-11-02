@@ -688,7 +688,6 @@ export default function App() {
           onToggleTheme={handleToggleTheme}
           onSetPowerMode={handleSetPowerMode}
           onToggleFanBoost={handleToggleFanBoost}
-          onToggleBatteryLimit={handleToggleBatteryLimit}
           onSwitchRefreshRate={handleSwitchRefreshRate}
           onToggleWinKey={handleToggleWinKey}
           onToggleAutostart={handleToggleAutostart}
