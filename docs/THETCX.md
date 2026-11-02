@@ -35,7 +35,7 @@ i7-14650HX + RTX 5070 Ti Laptop（65 W 底 + 50 W cTGP + 25 W DB）。
 
 ## 命令行 `orv`
 
-`orv.exe`（`src-tauri/crates/orv`，独立 crate，普通权限运行）通过命名管道 `\.\pipe\openrevo-cli`
+`orv.exe`（`src-tauri/crates/orv`，独立 crate，普通权限运行）通过命名管道 `\\.\pipe\openrevo-cli`
 把命令交给正在运行的 OpenRevo 执行，走的是和界面按钮相同的函数，面板会同步刷新。
 管道只对当前用户、Administrators、SYSTEM 开放；没有 EC 写入命令，只有 `ec read`。
 安装目录 `E:\OpenRevo-v0.9.3-portable` 已加入用户 PATH。
