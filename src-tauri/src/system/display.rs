@@ -356,6 +356,19 @@ pub fn get_refresh_rate() -> u32 {
     }
 }
 
+/// Refresh rate stored in the display registry for the primary display (the user's setting),
+/// unaffected by a temporary session-only change or by mode-switch lag.
+pub fn get_registry_refresh_rate() -> u32 {
+    unsafe {
+        let mut dm: DEVMODEA = std::mem::zeroed();
+        dm.dmSize = std::mem::size_of::<DEVMODEA>() as u16;
+        if EnumDisplaySettingsA(None, ENUM_REGISTRY_SETTINGS, &mut dm).as_bool() {
+            return dm.dmDisplayFrequency;
+        }
+        get_refresh_rate()
+    }
+}
+
 /// Set primary display refresh rate (Hz)
 pub fn set_refresh_rate(hz: u32) -> Result<(), String> {
     unsafe {
