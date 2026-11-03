@@ -112,7 +112,7 @@ pub fn build_tray_menu(
     let office_item = CheckMenuItem::with_id(app, "mode_office", "办公模式 (Office)", true, initial_mode == 1, None::<&str>)?;
     let balance_item = CheckMenuItem::with_id(app, "mode_balance", "均衡模式 (Balance)", true, initial_mode == 2, None::<&str>)?;
     let beast_item = CheckMenuItem::with_id(app, "mode_beast", "狂暴模式 (Beast)", true, initial_mode == 3, None::<&str>)?;
-    let custom_item = CheckMenuItem::with_id(app, "mode_custom", "极客调校 (Custom)", true, initial_mode == 4, None::<&str>)?;
+    let custom_item = CheckMenuItem::with_id(app, "mode_custom", "自定义 (Custom)", true, initial_mode == 4, None::<&str>)?;
 
     let sep2 = PredefinedMenuItem::separator(app)?;
 

@@ -382,7 +382,8 @@ fn handle(app: &AppHandle, line: &str, client_elevated: bool) -> Value {
     match dispatch(app, cmd, &args, client_elevated) {
         Ok(data) => json!({ "ok": true, "data": data }),
         Err(e) => {
-            crate::log_warn!("CLI", "orv {:?} failed: {}", cmd, e);
+            let shown: String = e.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+            crate::log_warn!("CLI", "orv {:?} failed: {}", cmd, shown);
             json!({ "ok": false, "error": e })
         }
     }

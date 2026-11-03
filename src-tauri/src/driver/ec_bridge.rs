@@ -282,6 +282,13 @@ impl EcBridge {
         });
     }
 
+    /// Update only the cached mode (the caller applies the hardware mode itself, synchronously).
+    pub fn set_power_mode_cache(&self, ui_mode: u8) {
+        let mut c = self.cache.lock();
+        c.power_mode = ui_mode;
+        c.power_mode_cooldown_until = Instant::now() + Duration::from_secs(5);
+    }
+
     pub fn set_power_mode_from_hardware(&self, detected_mode: u8) {
         crate::log_info!("EC_BRIDGE", "Hardware aligned set_power_mode: {}", detected_mode);
         {

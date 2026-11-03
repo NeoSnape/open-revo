@@ -525,6 +525,65 @@ pub fn get_brightness() -> Result<u8, String> {
     }
 }
 
+/// Separate AC and DC brightness levels (0..100) as stored by the display driver.
+pub fn get_brightness_levels() -> Result<(u8, u8), String> {
+    unsafe {
+        let name = b"\\\\.\\LCD\0";
+        let h = CreateFileA(name.as_ptr(), GENERIC_READ_WRITE, FILE_SHARE_READ_WRITE, std::ptr::null_mut(), OPEN_EXISTING, 0, std::ptr::null_mut());
+        if h == -1 || h == 0 {
+            return Err("Failed to open \\\\.\\LCD device handle".into());
+        }
+        let mut data = DisplayBrightness::default();
+        let mut bytes_returned = 0u32;
+        let ok = DeviceIoControl(
+            h,
+            IOCTL_VIDEO_QUERY_DISPLAY_BRIGHTNESS,
+            std::ptr::null(),
+            0,
+            &mut data as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<DisplayBrightness>() as u32,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        );
+        CloseHandle(h as *mut std::ffi::c_void);
+        if ok != 0 {
+            Ok((data.uc_ac_brightness.min(100), data.uc_dc_brightness.min(100)))
+        } else {
+            Err("IOCTL_VIDEO_QUERY_DISPLAY_BRIGHTNESS failed".into())
+        }
+    }
+}
+
+/// Set the AC and DC brightness levels independently (DISPLAYPOLICY_BOTH).
+pub fn set_brightness_levels(ac: u8, dc: u8) -> Result<(), String> {
+    const DISPLAYPOLICY_BOTH: u8 = 0x3;
+    unsafe {
+        let name = b"\\\\.\\LCD\0";
+        let h = CreateFileA(name.as_ptr(), GENERIC_READ_WRITE, FILE_SHARE_READ_WRITE, std::ptr::null_mut(), OPEN_EXISTING, 0, std::ptr::null_mut());
+        if h == -1 || h == 0 {
+            return Err("Failed to open \\\\.\\LCD device handle".into());
+        }
+        let mut in_data = DisplayBrightness { uc_display_policy: DISPLAYPOLICY_BOTH, uc_ac_brightness: ac.min(100), uc_dc_brightness: dc.min(100) };
+        let mut bytes_returned = 0u32;
+        let ok = DeviceIoControl(
+            h,
+            IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
+            &mut in_data as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<DisplayBrightness>() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        );
+        CloseHandle(h as *mut std::ffi::c_void);
+        if ok != 0 {
+            Ok(())
+        } else {
+            Err("IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS failed".into())
+        }
+    }
+}
+
 /// Set laptop display brightness (0..100) via native Win32 IOCTL
 pub fn set_brightness(level: u8) -> Result<(), String> {
     let clamped = level.min(100);
