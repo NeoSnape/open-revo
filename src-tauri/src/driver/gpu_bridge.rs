@@ -570,10 +570,8 @@ pub fn detect_integrated_gpu() -> Option<(String, u64)> {
     }
 
     // Fallback: platform architecture fallback
-    let (cpu, is_amd) = crate::driver::uefi_nvram::get_cpu_info();
-    if is_amd {
-        Some(("AMD Radeon Graphics".to_string(), 0))
-    } else if !cpu.is_empty() {
+    let (cpu, _) = crate::driver::uefi_nvram::get_cpu_info();
+    if !cpu.is_empty() {
         Some(("Intel(R) Graphics".to_string(), 0))
     } else {
         None

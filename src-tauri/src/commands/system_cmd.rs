@@ -44,7 +44,6 @@ pub struct HardwareState {
     pub takeover_oem: bool,
     pub autostart: bool,
     pub is_intel_13_14_gen: bool,
-    pub water_cooler_enabled: bool,
     pub support_flags: crate::driver::wmi_ec::HardwareSupportFlags,
     pub cpu_name: String,
     pub gpu_name: String,
@@ -155,7 +154,6 @@ pub fn collect_hardware_state(
         takeover_oem: cfg.takeover_oem,
         autostart: autostart_enabled,
         is_intel_13_14_gen,
-        water_cooler_enabled: crate::system::config::is_water_cooler_enabled(),
         support_flags: crate::driver::wmi_ec::get_hardware_support_flags(),
         cpu_name: cpu.get_brand(),
         gpu_name,
@@ -618,17 +616,6 @@ pub fn export_device_diagnostic_report(
 
     crate::log_info!("SYSTEM", "Diagnostic report exported cleanly to {}", path_str);
     Ok(path_str)
-}
-
-#[tauri::command]
-pub fn get_module_toggles() -> std::collections::HashMap<String, bool> {
-    crate::system::config::get_module_toggles()
-}
-
-#[tauri::command]
-pub fn set_module_enabled(id: String, enabled: bool) -> Result<bool, String> {
-    let res = crate::system::config::set_module_enabled(&id, enabled);
-    Ok(res)
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

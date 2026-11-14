@@ -13,7 +13,6 @@ import {
   Cpu,
   Cable,
   Sliders,
-  Droplets,
   HardDrive,
 } from 'lucide-react';
 import { HardwareState } from '../types/hardware';
@@ -33,9 +32,6 @@ export interface SystemSettingsViewProps {
   onUpdateOsdConfig: (cfg: OsdConfig) => void;
   onToggleWinKey?: () => void;
   onToggleAutostart: () => void;
-  onToggleWaterCooler?: (enabled: boolean) => void;
-  moduleToggles?: Record<string, boolean>;
-  onToggleModule?: (id: string, enabled: boolean) => void;
   capabilities?: ModelCapabilities;
 }
 
@@ -45,9 +41,6 @@ export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
   onUpdateOsdConfig: handleUpdateOsdConfig,
   onToggleWinKey: _onToggleWinKey,
   onToggleAutostart,
-  onToggleWaterCooler: _onToggleWaterCooler,
-  moduleToggles: _moduleToggles,
-  onToggleModule: _onToggleModule,
 }) => {
 
   const [logStatus, setLogStatus] = useState<{
@@ -733,7 +726,6 @@ export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
                   <div className="sys-chip-row">
                     {[
                       { label: '全部', value: null, Icon: Globe },
-                      { label: '外置水冷', value: 'cooler', Icon: Droplets },
                       { label: '自定义追踪', value: 'custom', Icon: Gauge },
                       { label: 'RGB与推流', value: 'light', Icon: Lightbulb },
                       { label: '电源与风扇', value: 'power', Icon: Zap },

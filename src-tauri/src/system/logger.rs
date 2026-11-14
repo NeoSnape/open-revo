@@ -237,11 +237,6 @@ pub fn expand_filter_patterns(raw: &str) -> Vec<String> {
                     patterns.push(s.to_string());
                 }
             }
-            "ble" | "cooler" | "water" => {
-                for s in &["BLE", "COOLER", "BLE_COOLER", "BLE_TX", "BLE_LOOP", "BLE_SMART", "COOLER_CMD", "COOLER_UI"] {
-                    patterns.push(s.to_string());
-                }
-            }
             "hardware" => {
                 for s in &["HARDWARE", "HARDWARE_MCU"] {
                     patterns.push(s.to_string());

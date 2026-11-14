@@ -31,16 +31,7 @@ pub fn check_igpu_present() -> bool {
                 return true;
             }
         }
-        // CPU-level hardware assertion: All Intel 12/13/14th Gen mobile HX/H CPUs (e.g. 14900HX)
-        // and AMD mobile APUs physically possess integrated graphics, even if disconnected during dGPU Direct mode.
-        let (cpu, is_amd) = crate::driver::uefi_nvram::get_cpu_info();
-        let u = cpu.to_uppercase();
-        if !is_amd && (u.contains("HX") || u.contains("H") || u.contains("CORE")) {
-            return true;
-        }
-        if is_amd && (u.contains("HS") || u.contains("HX") || u.contains("H") || u.contains("RYZEN")) {
-            return true;
-        }
+        // The i7-14650HX always has an iGPU, even while it is disconnected in dGPU-direct mode.
         true
     })
 }

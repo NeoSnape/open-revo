@@ -164,7 +164,7 @@ fn query_native_probe() -> NativeHardwareProbeResult {
         .unwrap_or_else(|| "Unknown".to_string());
 
     // 2. CPU Architecture & Specification
-    let (cpu_name, is_amd) = crate::driver::uefi_nvram::get_cpu_info();
+    let (cpu_name, _) = crate::driver::uefi_nvram::get_cpu_info();
 
     // 3. Operating System Info
     let os_prod = get_reg_sz("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "ProductName")
@@ -291,9 +291,7 @@ fn query_native_probe() -> NativeHardwareProbeResult {
     }
 
     // 6. UEFI NVRAM Overclock Menu Status
-    let (oc_status, oc_support, oc_switch) = if is_amd {
-        ("AMD_NOT_APPLICABLE".to_string(), "N/A".to_string(), "N/A".to_string())
-    } else {
+    let (oc_status, oc_support, oc_switch) = {
         let status = crate::driver::uefi_nvram::read_bios_advanced_menu_status();
         if status.supported {
             if status.enabled {

@@ -112,10 +112,6 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
     }
   }, [initialOpenCustomTuning]);
 
-  // Module toggles: the backend side (plugin system) was removed in this fork, so every module stays
-  // enabled; kept as local state for the slot filter below.
-  const [moduleToggles, setModuleToggles] = useState<Record<string, boolean>>({});
-
   // Model Capabilities (Declarative Hardware Driver Contract)
   const [internalCapabilities, setInternalCapabilities] = useState<ModelCapabilities | undefined>(undefined);
 
@@ -132,19 +128,6 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
         .catch((err) => console.warn('Failed to load model capabilities:', err));
     }
   }, [propCapabilities]);
-
-  // On non-dGPU machines, GPU tab remains accessible for display brightness & color tuning controls
-
-  const handleToggleModule = (id: string, enabled: boolean) => {
-    setModuleToggles((prev) => ({ ...prev, [id]: enabled }));
-  };
-
-  // Safe Mode fallback: if currently viewing a tab that got disabled, safely revert to overview
-  useEffect(() => {
-    if (moduleToggles[activeTab] === false) {
-      setActiveTab('overview');
-    }
-  }, [moduleToggles, activeTab]);
 
   const [osdConfig, setOsdConfig] = useState<OsdConfig>({
     enabled: true,
@@ -225,7 +208,7 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
       el.removeEventListener('scroll', checkNavScroll);
       window.removeEventListener('resize', checkNavScroll);
     };
-  }, [status, moduleToggles]);
+  }, [status]);
 
   useEffect(() => {
     const el = navBarRef.current;
@@ -465,7 +448,7 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
             }
           }}
         >
-          {BUILTIN_MODULE_SLOTS.filter((slot) => isSlotActive(slot, { status, isWaterCoolerEnabled: false, isCoolerConnected: false, moduleToggles, capabilities }))
+          {BUILTIN_MODULE_SLOTS.filter((slot) => isSlotActive(slot, { status, capabilities }))
             .sort((a, b) => a.order - b.order)
             .map((slot) => {
               const IconComponent = slot.icon;
@@ -537,9 +520,6 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
               onUpdateOsdConfig={handleUpdateOsdConfig}
               onToggleWinKey={onToggleWinKey}
               onToggleAutostart={onToggleAutostart}
-              onToggleWaterCooler={() => {}}
-              moduleToggles={moduleToggles}
-              onToggleModule={handleToggleModule}
               capabilities={capabilities}
             />
           </ModuleErrorBoundary>

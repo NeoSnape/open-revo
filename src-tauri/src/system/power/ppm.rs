@@ -215,50 +215,6 @@ pub fn apply_all_sleep_guard(enable: bool) {
 }
 
 #[cfg(target_os = "windows")]
-const BLD_AMD_PPM_PROCESSOR_WIN11: &[u8] = &[]; // AMD/BLD packages removed: Intel-only build
-#[cfg(target_os = "windows")]
-const BLD_AMD_PPM_PROCESSOR_WIN10: &[u8] = &[]; // AMD/BLD packages removed: Intel-only build
-#[cfg(target_os = "windows")]
-const BLD_AMD_PPM_NVME: &[u8] = &[]; // AMD/BLD packages removed: Intel-only build
-
-#[cfg(target_os = "windows")]
-fn is_windows_11() -> bool {
-    use windows::core::PCWSTR;
-    use windows::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ,
-    };
-
-    let subkey: Vec<u16> = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\0".encode_utf16().collect();
-    let val_name: Vec<u16> = "CurrentBuild\0".encode_utf16().collect();
-    let mut hkey = HKEY::default();
-
-    unsafe {
-        if RegOpenKeyExW(HKEY_LOCAL_MACHINE, PCWSTR(subkey.as_ptr()), 0, KEY_READ, &mut hkey).is_ok() {
-            let mut buf = [0u16; 64];
-            let mut size = (buf.len() * 2) as u32;
-            let mut data_type = REG_SZ;
-            let res = RegQueryValueExW(
-                hkey,
-                PCWSTR(val_name.as_ptr()),
-                None,
-                Some(&mut data_type),
-                Some(buf.as_mut_ptr() as *mut _),
-                Some(&mut size),
-            );
-            let _ = RegCloseKey(hkey);
-            if res.is_ok() {
-                let len = (size as usize / 2).saturating_sub(1);
-                let build_str = String::from_utf16_lossy(&buf[..len]).trim().to_string();
-                if let Ok(build_num) = build_str.parse::<u32>() {
-                    return build_num >= 22000;
-                }
-            }
-        }
-    }
-    true
-}
-
-#[cfg(target_os = "windows")]
 fn install_provisioning_package(pkg_path: &std::path::Path) -> bool {
     let path_str = pkg_path.to_string_lossy();
     let ps_cmd = format!(
@@ -353,70 +309,9 @@ pub fn restore_official_power_plan() -> Result<String, String> {
         let _ = run_powercfg(&["/setacvalueindex", "scheme_current", "SUB_PROCESSOR", "be337238-0d82-4146-a960-4f3749d470c7", "2"]);
         let _ = run_powercfg(&["/setdcvalueindex", "scheme_current", "SUB_PROCESSOR", "be337238-0d82-4146-a960-4f3749d470c7", "2"]);
 
-        // 5. Adaptive Re-provisioning for BLD (AMD) vs TongFang (Intel) OEM models
-        let (_, is_amd_cpu) = crate::driver::uefi_nvram::get_cpu_info();
-        let is_bld_or_amd = is_amd_cpu && !BLD_AMD_PPM_NVME.is_empty();
-
-        let return_msg = if is_bld_or_amd {
-            crate::log_info!("POWER_PPM", "Target platform detected as BLD/AMD. Deploying official AMD PPM packages...");
-
-            // 5.1 If AmdPpkgSvc service exists, restart it to trigger native driver reload
-            let has_amd_service = std::process::Command::new("sc.exe")
-                .args(["query", "AmdPpkgSvc"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output()
-                .map(|o| {
-                    let text = String::from_utf8_lossy(&o.stdout);
-                    text.contains("STATE")
-                })
-                .unwrap_or(false);
-
-            if has_amd_service {
-                crate::log_info!("POWER_PPM", "Found active AmdPpkgSvc service, cycling to trigger driver PPM synchronization...");
-                let _ = std::process::Command::new("net")
-                    .args(["stop", "AmdPpkgSvc"])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .output();
-                let _ = std::process::Command::new("net")
-                    .args(["start", "AmdPpkgSvc"])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .output();
-            }
-
-            // 5.2 Extract and install embedded AMD PPM packages into temp directory
-            let temp_dir = std::env::temp_dir().join("openrevo_ppm");
-            let _ = std::fs::create_dir_all(&temp_dir);
-
-            let is_win11 = is_windows_11();
-            let (proc_pkg_name, proc_pkg_bytes) = if is_win11 {
-                ("AMD.Power.Processor.2.ppkg", BLD_AMD_PPM_PROCESSOR_WIN11)
-            } else {
-                ("AMD.Power.Processor.ppkg", BLD_AMD_PPM_PROCESSOR_WIN10)
-            };
-
-            let proc_pkg_path = temp_dir.join(proc_pkg_name);
-            let nvme_pkg_path = temp_dir.join("AMD.Power.NVMe.ppkg");
-
-            let write_proc_ok = std::fs::write(&proc_pkg_path, proc_pkg_bytes).is_ok();
-            let write_nvme_ok = std::fs::write(&nvme_pkg_path, BLD_AMD_PPM_NVME).is_ok();
-
-            let mut installed_count = 0;
-            if write_proc_ok && install_provisioning_package(&proc_pkg_path) {
-                installed_count += 1;
-            }
-            if write_nvme_ok && install_provisioning_package(&nvme_pkg_path) {
-                installed_count += 1;
-            }
-
-            // Clean up temporary package files safely
-            let _ = std::fs::remove_file(&proc_pkg_path);
-            let _ = std::fs::remove_file(&nvme_pkg_path);
-            let _ = std::fs::remove_dir(&temp_dir);
-
-            crate::log_info!("POWER_PPM", "BLD/AMD PPM package restoration complete ({} packages installed)", installed_count);
-            "已成功恢复宝龙达/AMD 官方出厂电源计划与 PPM 处理器/NVMe 调度！".to_string()
-        } else {
-            crate::log_info!("POWER_PPM", "Target platform detected as TongFang/Intel. Scanning and applying OEM PPM packages...");
+        // 5. Re-apply the OEM provisioning packages
+        let return_msg = {
+            crate::log_info!("POWER_PPM", "Scanning and applying OEM PPM packages...");
 
             // 5.3 Scan standard provisioning directories for Intel/TongFang PPM packages
             let mut installed_count = 0;

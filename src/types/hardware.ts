@@ -36,7 +36,6 @@ export interface HardwareState {
   takeover_oem?: boolean;    // true if OpenRevo paused the OEM services
   autostart?: boolean;       // true if autostart enabled
   is_intel_13_14_gen?: boolean; // true if running on 13th or 14th Gen Intel CPU
-  water_cooler_enabled?: boolean; // Water cooler module enabled status (user preference or detected)
   support_flags?: HardwareSupportFlags; // Physical motherboard hardware capability flags
   cpu_name?: string;         // e.g. "Intel(R) Core(TM) i9-14900HX" or "AMD Ryzen 7 7840H"
   gpu_name?: string;         // e.g. "NVIDIA GeForce RTX 4090 Laptop GPU"

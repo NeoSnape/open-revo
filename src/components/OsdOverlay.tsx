@@ -161,39 +161,8 @@ export const OsdOverlay: React.FC = () => {
     }, 1600);
   };
 
-  // Dynamic theme skin loader for OSD window
-  const syncOsdSkin = async (skinId: string | null) => {
-    const existing = (document.getElementById('openrevo-theme-skin') || document.getElementById('openrevo-custom-skin')) as HTMLStyleElement | null;
-    if (existing) {
-      existing.remove();
-    }
-    if (skinId) {
-      document.documentElement.setAttribute('data-skin', skinId);
-      try {
-        const css = await invoke<string>('load_plugin_theme_css', { pluginId: skinId });
-        const newStyle = document.createElement('style');
-        newStyle.id = 'openrevo-theme-skin';
-        newStyle.textContent = css;
-        document.head.appendChild(newStyle);
-      } catch (e) {
-        console.warn('[OSD] Failed to load theme CSS for skin:', skinId, e);
-      }
-    } else {
-      document.documentElement.removeAttribute('data-skin');
-    }
-  };
-
   useEffect(() => {
     const unlistenFns: (() => void)[] = [];
-
-    // 0. Synchronize active theme skin on boot & listen to cross-window changes
-    invoke<string | null>('get_active_skin')
-      .then(syncOsdSkin)
-      .catch(() => {});
-
-    listen<{ skinId: string | null }>('active-skin-changed', (event) => {
-      syncOsdSkin(event.payload.skinId);
-    }).then((un) => unlistenFns.push(un));
 
     // 1. Fetch initial OSD configuration from backend
     invoke<any>('get_osd_config')

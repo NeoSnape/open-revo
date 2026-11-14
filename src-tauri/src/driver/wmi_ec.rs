@@ -691,7 +691,6 @@ pub fn set_custom_pl_limits(pl1: u16, pl2: u16, pl4: u16) -> bool {
 
 /// Apply CPU Temperature Wall (Target Temperature 80C ~ 105C with Adaptive Architecture Support)
 pub fn set_cpu_temp_target(enabled: bool, target_c: u8) -> bool {
-    let is_amd = crate::system::cpu_monitor::is_amd_cpu();
     let native_tjmax = crate::system::cpu_monitor::get_cpu_native_tjmax();
 
     // Probe hardware factory preset from EC Turbo factory thermal limit
@@ -718,37 +717,22 @@ pub fn set_cpu_temp_target(enabled: bool, target_c: u8) -> bool {
     //    E.g. On 100°C TjMax: 95°C -> Offset 5 -> 0x85 (133).
     //    When disabled: Clears Bit 7 while preserving factory offset (e.g. 0x05) to safely yield to BIOS defaults
     //    without triggering BD PROCHOT 0.8GHz freeze.
-    // 2. AMD platforms (Ryzen Cezanne, Rembrandt, Phoenix, Hawk Point, Strix Point, Dragon Range):
-    //    EC firmware expects literal Celsius with Bit 7 enable switch: 0x80 | (clamped_temp & 0x7F).
-    //    E.g. 85°C -> 0xD5, 95°C -> 0xDF.
-    //    When disabled: Clears Bit 7 while restoring factory Celsius (or safe 95°C).
-    let raw_val = if is_amd {
-        if enabled {
-            0x80 | (clamped_temp & 0x7F) // Bit 7 = Enable Switch (0x80), Bits 6:0 = Target Celsius
-        } else {
-            // SAFE UNLOCK: For literal Celsius ECs, restore factory Celsius or safe 95°C with Bit 7 cleared.
-            // NEVER write 0x00, which some ECs interpret as a literal 0°C thermal wall (triggering BD PROCHOT 0.80GHz freeze)!
-            let factory_celsius = factory_tcc & 0x7F;
-            if factory_celsius >= 60 && factory_celsius <= 105 { factory_celsius } else { 95 }
-        }
+    // Intel offset mode (Bit 7 = Enable Switch, Bits 6:0 = Offset from native TjMax)
+    let raw_val = if enabled {
+        let tcc_offset = native_tjmax.saturating_sub(clamped_temp);
+        0x80 | (tcc_offset & 0x7F)
     } else {
-        // Intel offset mode (Bit 7 = Enable Switch, Bits 6:0 = Offset from native TjMax)
-        if enabled {
-            let tcc_offset = native_tjmax.saturating_sub(clamped_temp);
-            0x80 | (tcc_offset & 0x7F)
-        } else {
-            // SAFE UNLOCK: Restore default offset with Bit 7 cleared or factory offset.
-            let default_offset = native_tjmax.saturating_sub(95).max(5);
-            let factory_offset = factory_tcc & 0x7F;
-            if factory_offset > 0 && factory_offset <= 30 { factory_offset } else { default_offset }
-        }
+        // SAFE UNLOCK: Restore default offset with Bit 7 cleared or factory offset.
+        let default_offset = native_tjmax.saturating_sub(95).max(5);
+        let factory_offset = factory_tcc & 0x7F;
+        if factory_offset > 0 && factory_offset <= 30 { factory_offset } else { default_offset }
     };
 
     let ok = wmi_write_ec(ADDR_CUSTOM_TCC, raw_val);
     crate::log_info!(
         "CUSTOM_TRACE",
-        "set_cpu_temp_target: enabled={}, target={}C (clamped={}C, tjmax={}C), factory_tcc=0x{:02X} -> custom_tcc=0x{:02X} (is_amd={}) -> ok={}",
-        enabled, target_c, clamped_temp, native_tjmax, factory_tcc, raw_val, is_amd, ok
+        "set_cpu_temp_target: enabled={}, target={}C (clamped={}C, tjmax={}C), factory_tcc=0x{:02X} -> custom_tcc=0x{:02X} -> ok={}",
+        enabled, target_c, clamped_temp, native_tjmax, factory_tcc, raw_val, ok
     );
     crate::log_info!("EC_TUNING", "set_cpu_temp_target: enabled={}, target={}C, tjmax={}C -> raw_val=0x{:02X} -> ok={}", enabled, target_c, native_tjmax, raw_val, ok);
     ok

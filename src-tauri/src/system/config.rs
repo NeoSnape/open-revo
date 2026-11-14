@@ -26,37 +26,6 @@ pub struct AppConfig {
     pub log_level: u8,            // 1: Error only, 2: All logs
     #[serde(default)]
     pub log_filter: Option<String>, // Optional module filter (e.g. "lighting", "ec,fan")
-    #[serde(default)]
-    pub water_cooler_enabled: Option<bool>, // Manual override for water cooling module (persisted in config.json)
-    #[serde(default = "default_true")]
-    pub keep_water_cooler: bool,  // Keep liquid cooler active when taking over OEM
-    #[serde(default = "default_true")]
-    pub cooler_led_on: bool,      // true / false
-    #[serde(default)]
-    pub cooler_led_r: u8,         // 0-255
-    #[serde(default = "default_cooler_led_g")]
-    pub cooler_led_g: u8,         // 0-255
-    #[serde(default)]
-    pub cooler_led_b: u8,         // 0-255
-    #[serde(default = "default_cooler_led_mode")]
-    pub cooler_led_mode: u8,      // 0: Static, 1: Breathe, 2: Colorful, 3: Breathe Color
-
-    // Water Cooler Speeds & Strategy
-    #[serde(default = "default_pump_v")]
-    pub cooler_pump_voltage: u8,  // 7, 8, 11
-    #[serde(default = "default_fan_d")]
-    pub cooler_fan_duty: u8,      // 0 - 100
-    #[serde(default = "default_strategy")]
-    pub cooler_strategy: String,  // "smart" | "quiet" | "balance" | "performance" | "custom"
-    #[serde(default = "default_cooler_curve_points")]
-    pub cooler_curve_points: Vec<CoolerCurvePoint>,
-    #[serde(default = "default_cooler_mac")]
-    pub cooler_mac: String,       // e.g. "CA:CB:C3:02:97:18" (auto-detected and persistent)
-    #[serde(default = "default_cooler_pump_start_temp")]
-    pub cooler_pump_start_temp: u8, // default 55°C (Stop/Standard pump threshold)
-    #[serde(default = "default_cooler_pump_turbo_temp")]
-    pub cooler_pump_turbo_temp: u8, // default 90°C (Standard/Turbo pump threshold)
-
     // Display
     #[serde(default = "default_refresh_rate")]
     pub refresh_rate: u32,        // 60, 240
@@ -217,44 +186,10 @@ pub struct AppConfig {
     /// Feed OpenRevo sensors into the RTSS in-game OSD (needs RivaTuner Statistics Server running).
     #[serde(default = "default_true")]
     pub rtss_osd_enabled: bool,
-
-    // Builtin & Extension Module Toggles (Persisted in config.json)
-    // Allows safe-mode isolation and fine-grained user control of tabs/plugins
-    #[serde(default = "default_module_toggles")]
-    pub module_toggles: std::collections::HashMap<String, bool>,
-
-    // Third-party custom plugin toggles (Persisted in config.json)
-    #[serde(default)]
-    pub custom_plugin_toggles: std::collections::HashMap<String, bool>,
-
-    // Persisted coordinates for custom desktop widgets: plugin_id -> (x, y)
-    #[serde(default)]
-    pub widget_positions: std::collections::HashMap<String, (i32, i32)>,
-
-    // Currently active custom skin plugin ID (if any)
-    #[serde(default)]
-    pub active_skin: Option<String>,
-
-    // Currently active custom background / wallpaper plugin ID (if any)
-    #[serde(default)]
-    pub active_background: Option<String>,
 }
 
 fn default_preset_fan_policy() -> String {
     crate::machine::FAN_POLICY_TUNED.to_string()
-}
-
-fn default_module_toggles() -> std::collections::HashMap<String, bool> {
-    let mut map = std::collections::HashMap::new();
-    map.insert("overview".to_string(), true);
-    map.insert("gpu".to_string(), true);
-    map.insert("tuning".to_string(), true);
-    map.insert("lighting".to_string(), true);
-    map.insert("water".to_string(), false);
-    map.insert("system".to_string(), true);
-    map.insert("plugins".to_string(), true);
-    map.insert("sponsor".to_string(), true);
-    map
 }
 
 fn default_active_profile_id() -> String {
@@ -367,36 +302,11 @@ pub fn default_fan_curve() -> Vec<FanCurvePoint> {
     ]
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CoolerCurvePoint {
-    pub temp: u8,
-    pub fan_duty: u8,
-    pub pump_voltage: u8, // 7, 8, 11
-}
-
-pub fn default_cooler_curve_points() -> Vec<CoolerCurvePoint> {
-    vec![
-        CoolerCurvePoint { temp: 45, fan_duty: 0, pump_voltage: 0 },
-        CoolerCurvePoint { temp: 55, fan_duty: 35, pump_voltage: 2 },
-        CoolerCurvePoint { temp: 65, fan_duty: 50, pump_voltage: 2 },
-        CoolerCurvePoint { temp: 80, fan_duty: 60, pump_voltage: 2 },
-        CoolerCurvePoint { temp: 90, fan_duty: 75, pump_voltage: 2 },
-        CoolerCurvePoint { temp: 95, fan_duty: 100, pump_voltage: 3 },
-    ]
-}
-
 fn default_power_mode() -> u8 { 2 }
 fn default_power_mode_ac() -> u8 { 3 }
 fn default_power_mode_battery() -> u8 { 2 }
 fn default_battery_limit() -> u8 { 80 }
 fn default_true() -> bool { true }
-fn default_cooler_led_g() -> u8 { 128 }
-fn default_cooler_led_mode() -> u8 { 2 } // Default colorful flow
-fn default_pump_v() -> u8 { 7 }
-fn default_fan_d() -> u8 { 0 }
-fn default_strategy() -> String { "smart".to_string() }
-fn default_cooler_pump_start_temp() -> u8 { 55 }
-fn default_cooler_pump_turbo_temp() -> u8 { 90 }
 fn default_refresh_rate() -> u32 { 300 }
 fn default_osd_theme() -> String { "cinema".to_string() }
 fn default_osd_scale() -> String { "100%".to_string() }
@@ -412,22 +322,6 @@ impl Default for AppConfig {
             battery_limit: 80,      // Default 80% battery protection
             win_key_locked: false,
             autostart: false,
-            water_cooler_enabled: None,
-            keep_water_cooler: true,
-            cooler_led_on: true,
-            cooler_led_r: 0,
-            cooler_led_g: 128,
-            cooler_led_b: 0,
-            cooler_led_mode: 2,
-
-            cooler_pump_voltage: 7,
-            cooler_fan_duty: 0,
-            cooler_strategy: "smart".to_string(),
-            cooler_curve_points: default_cooler_curve_points(),
-            cooler_mac: String::new(),
-            cooler_pump_start_temp: 55,
-            cooler_pump_turbo_temp: 90,
-
             refresh_rate: 300,
             miniled_enabled: false,
 
@@ -503,11 +397,6 @@ impl Default for AppConfig {
             cpu_pl4_offset: 0,
             cpu_temp_offset: 0,
             cpu_tjmax: None,
-            module_toggles: default_module_toggles(),
-            custom_plugin_toggles: std::collections::HashMap::new(),
-            widget_positions: std::collections::HashMap::new(),
-            active_skin: None,
-            active_background: None,
         }
     }
 }
@@ -522,10 +411,6 @@ fn default_gpu_mode() -> String {
 
 fn default_battery_mode() -> String {
     "balance".to_string()
-}
-
-fn default_cooler_mac() -> String {
-    String::new()
 }
 
 static RESOLVED_CONFIG_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -1315,46 +1200,6 @@ pub fn reload_config_from_disk() -> AppConfig {
     let cfg = load_config_from_disk();
     *guard = Some(cfg.clone());
     cfg
-}
-
-/// Check if water cooler module is enabled:
-/// 1. Prioritizes explicit user configuration in module_toggles or config.json
-/// 2. If Windows already has a paired water cooler, naturally self-heals and enables
-/// 3. If unset/default, defaults to physical hardware detection (`has_water_cooler`)
-pub fn is_water_cooler_enabled() -> bool {
-    false
-}
-
-/// Retrieve the map of all module toggles from config.json
-pub fn get_module_toggles() -> std::collections::HashMap<String, bool> {
-    let cfg = load_config();
-    cfg.module_toggles
-}
-
-/// Update a specific module toggle in config.json and return the updated state
-pub fn set_module_enabled(id: &str, enabled: bool) -> bool {
-    // Defense in depth: do not allow disabling system, sponsor, or plugins
-    if id == "system" || id == "sponsor" || id == "plugins" {
-        return true;
-    }
-    let mut cfg = load_config();
-    cfg.module_toggles.insert(id.to_string(), enabled);
-    // Maintain backward compatibility with legacy water_cooler_enabled field
-    if id == "water" {
-        cfg.water_cooler_enabled = Some(enabled);
-    }
-    save_config(&cfg);
-    crate::log_info!("CONFIG", "Module toggle updated: {} -> {}", id, enabled);
-    enabled
-}
-
-/// Check if a specific module is enabled
-pub fn is_module_enabled(id: &str) -> bool {
-    let cfg = load_config();
-    if id == "water" {
-        return is_water_cooler_enabled();
-    }
-    cfg.module_toggles.get(id).copied().unwrap_or(true)
 }
 
 

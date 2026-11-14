@@ -319,7 +319,6 @@ function hardwareState(): HardwareState {
     takeover_oem: true,
     autostart: state.autostart,
     is_intel_13_14_gen: true,
-    water_cooler_enabled: false,
     support_flags: { ...SUPPORT_FLAGS },
     cpu_name: MACHINE.cpu_name,
     gpu_name: MACHINE.gpu_name,

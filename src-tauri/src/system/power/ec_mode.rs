@@ -19,7 +19,6 @@ pub fn apply_ec_hardware_mode(ui_mode: u8) {
         }
     }
 
-    let _is_amd = crate::system::cpu_monitor::is_amd_cpu();
     let _factory_tcc = wmi_ec::wmi_read_ec(wmi_ec::ADDR_TURBO_TCC).unwrap_or(0);
 
     let cfg = crate::system::config::load_config();

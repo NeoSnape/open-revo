@@ -49,9 +49,6 @@ export interface ModelCapabilities {
 
 export interface ModuleSlotContext {
   status: HardwareState;
-  isWaterCoolerEnabled: boolean;
-  isCoolerConnected: boolean;
-  moduleToggles?: Record<string, boolean>;
   capabilities?: ModelCapabilities;
 }
 
@@ -138,14 +135,5 @@ export const BUILTIN_MODULE_SLOTS: BuiltinModuleSlot[] = [
   },
 ];
 
-/**
- * 判断模块是否处于活跃激活状态：
- * 1. 若 config.json 中该模块显式设为 false，直接停用隐藏（排错安全模式）
- * 2. 否则按模块硬件条件与可见性函数判定
- */
-export const isSlotActive = (slot: BuiltinModuleSlot, ctx: ModuleSlotContext): boolean => {
-  if (ctx.moduleToggles && ctx.moduleToggles[slot.id] === false) {
-    return false;
-  }
-  return slot.isVisible(ctx);
-};
+/** 模块是否显示：按模块自己的硬件条件判定。 */
+export const isSlotActive = (slot: BuiltinModuleSlot, ctx: ModuleSlotContext): boolean => slot.isVisible(ctx);

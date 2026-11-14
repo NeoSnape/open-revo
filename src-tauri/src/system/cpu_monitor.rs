@@ -386,7 +386,6 @@ impl CpuMonitor {
         }
 
         // Fallback dynamic package power estimation (for AMD Ryzen APUs or systems where Windows RAPL is unavailable)
-        let is_amd = is_amd_cpu();
         let is_hx = is_desktop_replacement_hx();
         let usage = self.usage_pct.load(Ordering::SeqCst) as f32;
         let cur_mhz = self.current_mhz.load(Ordering::SeqCst) as f32;
@@ -397,12 +396,8 @@ impl CpuMonitor {
         // Mobile APU/CPU Package power curve:
         // Idle (usage ~ 1-5%): ~5W - 8W
         // Full load turbo: 54W - 65W (APU / standard mobile), 82.5W (TDP base for 110W+ desktop-derived HX series)
-        let base_idle = if is_amd { 5.5f32 } else { 8.0f32 };
-        let max_tdp = if is_amd {
-            if is_hx { 82.5f32 } else { 54.0f32 }
-        } else {
-            if is_hx { 95.0f32 } else { 65.0f32 }
-        };
+        let base_idle = 8.0f32;
+        let max_tdp = if is_hx { 95.0f32 } else { 65.0f32 };
 
         let load_factor = (usage / 100.0).powf(1.15);
         let est_w = base_idle + (max_tdp - base_idle) * load_factor * (freq_ratio / 1.15).clamp(0.75, 1.35);
@@ -659,14 +654,6 @@ pub fn get_cpu_native_tjmax() -> u8 {
 
 fn detect_hardware_tjmax() -> u8 {
     let cfg = crate::system::config::load_config();
-
-    // 1. AMD CPU architecture: AMD generally uses literal Celsius in EC
-    if is_amd_cpu() {
-        if cfg.cpu_temp_target_max >= 105 {
-            return cfg.cpu_temp_target_max;
-        }
-        return 100;
-    }
 
     // 2. Intel CPU Microarchitecture & Model Recognition
     let brand = get_cached_cpu_brand().to_uppercase();
