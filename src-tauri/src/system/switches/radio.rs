@@ -183,7 +183,7 @@ pub fn get_or_detect_wifi_adapter(cfg: &mut crate::system::config::AppConfig) ->
                         if !adapter_name.is_empty() {
                             crate::log_info!("DEVICE_SWITCH", "Auto-discovered Wi-Fi adapter name via netsh: {}", adapter_name);
                             cfg.wifi_adapter_name = adapter_name.clone();
-                            crate::system::config::save_config(cfg);
+                            crate::system::config::modify_config(|c| c.wifi_adapter_name = adapter_name.clone());
                             return adapter_name;
                         }
                     }

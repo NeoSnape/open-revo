@@ -595,9 +595,7 @@ pub fn set_streamer_fps(
 
 #[tauri::command]
 pub fn set_auto_fallback_kb_on_battery(enable: bool) -> Result<bool, String> {
-    let mut cfg = crate::system::config::load_config();
-    cfg.auto_fallback_kb_on_battery = enable;
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.auto_fallback_kb_on_battery = enable);
     Ok(enable)
 }
 
@@ -747,9 +745,7 @@ pub fn get_keyboard_sleep_timeout() -> u32 {
 #[tauri::command]
 pub fn set_keyboard_sleep_timeout(seconds: u32, app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Emitter;
-    let mut cfg = crate::system::config::load_config();
-    cfg.keyboard_sleep_timeout = seconds;
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.keyboard_sleep_timeout = seconds);
 
     // If active model is Declarative (e.g. Xingyao 14), invoke WMI Mailbox
 

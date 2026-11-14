@@ -118,7 +118,11 @@ fn dispatch_acpi_event(
                 } else {
                     cfg.power_mode_battery = next_mode;
                 }
-                crate::system::config::save_config(&cfg);
+                crate::system::config::modify_config(|c| {
+                    c.power_mode = cfg.power_mode.clone();
+                    c.power_mode_ac = cfg.power_mode_ac.clone();
+                    c.power_mode_battery = cfg.power_mode_battery.clone();
+                });
 
                 crate::update_tray_power_mode(next_mode);
 

@@ -122,7 +122,7 @@ pub fn sync_autostart_target_path() {
                 let _ = set_autostart_enabled(true);
                 if !cfg.autostart {
                     cfg.autostart = true;
-                    crate::system::config::save_config(&cfg);
+                    crate::system::config::modify_config(|c| c.autostart = cfg.autostart.clone());
                 }
             }
         } else {
@@ -133,7 +133,7 @@ pub fn sync_autostart_target_path() {
             let _ = set_autostart_enabled(true);
             if !cfg.autostart {
                 cfg.autostart = true;
-                crate::system::config::save_config(&cfg);
+                crate::system::config::modify_config(|c| c.autostart = cfg.autostart.clone());
             }
         }
     } else if cfg.autostart {

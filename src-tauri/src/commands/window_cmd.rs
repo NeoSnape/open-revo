@@ -24,7 +24,10 @@ pub fn save_full_window_pos(x: i32, y: i32) {
     if cfg.full_window_x != Some(x) || cfg.full_window_y != Some(y) {
         cfg.full_window_x = Some(x);
         cfg.full_window_y = Some(y);
-        crate::system::config::save_config(&cfg);
+        crate::system::config::modify_config(|c| {
+            c.full_window_x = cfg.full_window_x.clone();
+            c.full_window_y = cfg.full_window_y.clone();
+        });
         crate::log_info!("WINDOW", "Persisted full dashboard window position: ({}, {})", x, y);
     }
 }
@@ -223,9 +226,10 @@ pub fn get_wake_window_mode() -> String {
 
 #[tauri::command]
 pub fn set_wake_window_mode(mode: String) -> Result<(), String> {
-    let mut cfg = crate::system::config::load_config();
-    cfg.wake_window_mode = mode;
-    crate::system::config::save_config(&cfg);
+    let cfg = crate::system::config::modify_config(|c| {
+        c.wake_window_mode = mode;
+        c.clone()
+    });
     crate::log_info!("WINDOW", "Wake window presentation mode set to: {}", cfg.wake_window_mode);
     Ok(())
 }
@@ -237,9 +241,7 @@ pub fn get_mini_auto_hide() -> bool {
 
 #[tauri::command]
 pub fn set_mini_auto_hide(enabled: bool) -> Result<(), String> {
-    let mut cfg = crate::system::config::load_config();
-    cfg.mini_auto_hide_on_blur = enabled;
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.mini_auto_hide_on_blur = enabled);
     crate::log_info!("WINDOW", "Mini drawer auto-hide on blur set to: {}", enabled);
     Ok(())
 }

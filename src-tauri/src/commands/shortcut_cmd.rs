@@ -71,9 +71,7 @@ pub fn get_rtss_osd_enabled() -> bool {
 
 #[tauri::command]
 pub fn set_rtss_osd_enabled(enabled: bool) -> bool {
-    let mut cfg = crate::system::config::load_config();
-    cfg.rtss_osd_enabled = enabled;
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.rtss_osd_enabled = enabled);
     if !enabled {
         crate::system::rtss_osd::release_now();
     }

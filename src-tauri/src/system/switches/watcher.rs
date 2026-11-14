@@ -267,12 +267,15 @@ pub fn start_hardware_state_watcher(
                         }
                         if is_thin_light {
                             crate::log_info!("POWER_WATCHER", "Power line unplugged on thin-and-light laptop: preserving user power mode {}", cur_mode);
-                            crate::system::config::save_config(&updated_cfg);
+                            crate::system::config::modify_config(|c| c.power_mode_ac = updated_cfg.power_mode_ac.clone());
                         } else if !updated_cfg.unlock_battery_power_limit {
                             let target_mode = if updated_cfg.power_mode_battery == 1 { 1 } else { 2 };
                             crate::log_info!("POWER_WATCHER", "DC round adapter unplugged: safely switching power mode {} -> {} (Battery mode) on Battery/Type-C", cur_mode, target_mode);
                             updated_cfg.power_mode = target_mode;
-                            crate::system::config::save_config(&updated_cfg);
+                            crate::system::config::modify_config(|c| {
+                                c.power_mode_ac = updated_cfg.power_mode_ac.clone();
+                                c.power_mode = updated_cfg.power_mode.clone();
+                            });
                             ec_bridge.lock().set_power_mode(target_mode);
                             crate::update_tray_power_mode(target_mode);
                             use tauri::Emitter;
@@ -282,7 +285,10 @@ pub fn start_hardware_state_watcher(
                             let _ = app.emit_to("osd", "physical-mode-switched", target_mode);
                         } else {
                             crate::log_info!("POWER_WATCHER", "DC round adapter unplugged: unlock_battery_power_limit enabled, keeping current power mode {}", cur_mode);
-                            crate::system::config::save_config(&updated_cfg);
+                            crate::system::config::modify_config(|c| {
+                                c.power_mode_ac = updated_cfg.power_mode_ac.clone();
+                                c.power_mode = updated_cfg.power_mode.clone();
+                            });
                         }
                         use tauri::Emitter;
                         let _ = app.emit("dc-status-changed", false);
@@ -308,7 +314,7 @@ pub fn start_hardware_state_watcher(
                             }
                         );
                         cfg.power_mode = target_mode;
-                        crate::system::config::save_config(&cfg);
+                        crate::system::config::modify_config(|c| c.power_mode = cfg.power_mode.clone());
                         ec_bridge.lock().set_power_mode(target_mode);
                         crate::update_tray_power_mode(target_mode);
                         use tauri::Emitter;
@@ -328,7 +334,7 @@ pub fn start_hardware_state_watcher(
                     if cfg.power_mode != target_mode {
                         crate::log_info!("POWER_WATCHER", "Initial loop: DC round adapter online, aligning power mode {} -> {}", cfg.power_mode, target_mode);
                         cfg.power_mode = target_mode;
-                        crate::system::config::save_config(&cfg);
+                        crate::system::config::modify_config(|c| c.power_mode = cfg.power_mode.clone());
                         ec_bridge.lock().set_power_mode(target_mode);
                         crate::update_tray_power_mode(target_mode);
                         use tauri::Emitter;
@@ -343,7 +349,7 @@ pub fn start_hardware_state_watcher(
                         let target_mode = if cfg.power_mode_battery == 1 { 1 } else { 2 };
                         crate::log_info!("POWER_WATCHER", "Initial loop: on Battery/Type-C, safely adjusting mode {} -> {}", cfg.power_mode, target_mode);
                         cfg.power_mode = target_mode;
-                        crate::system::config::save_config(&cfg);
+                        crate::system::config::modify_config(|c| c.power_mode = cfg.power_mode.clone());
                         ec_bridge.lock().set_power_mode(target_mode);
                         crate::update_tray_power_mode(target_mode);
                         use tauri::Emitter;

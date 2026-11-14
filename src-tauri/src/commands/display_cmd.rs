@@ -10,9 +10,7 @@ use crate::system::display_tuning::{
 #[tauri::command]
 pub fn switch_refresh_rate(hz: u32) -> Result<(), String> {
     display::set_refresh_rate(hz)?;
-    let mut cfg = crate::system::config::load_config();
-    cfg.refresh_rate = hz;
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.refresh_rate = hz);
     Ok(())
 }
 
@@ -34,18 +32,14 @@ pub fn set_display_monitor_refresh_rate(device_name: String, hz: u32) -> Result<
         .unwrap_or(false);
 
     if is_primary_or_internal || monitors.len() <= 1 {
-        let mut cfg = crate::system::config::load_config();
-        cfg.refresh_rate = hz;
-        crate::system::config::save_config(&cfg);
+        crate::system::config::modify_config(|c| c.refresh_rate = hz);
     }
     Ok(())
 }
 
 #[tauri::command]
 pub fn set_auto_min_refresh_on_battery(enable: bool) -> Result<bool, String> {
-    let mut cfg = crate::system::config::load_config();
-    cfg.auto_min_refresh_on_battery = enable;
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.auto_min_refresh_on_battery = enable);
     Ok(enable)
 }
 
@@ -392,9 +386,7 @@ pub async fn set_miniled_status(enabled: bool) -> Result<bool, String> {
         }
 
         if ok {
-            let mut cfg = crate::system::config::load_config();
-            cfg.miniled_enabled = enabled;
-            crate::system::config::save_config(&cfg);
+            crate::system::config::modify_config(|c| c.miniled_enabled = enabled);
 
             // Sync with OEM registry so official control center UI stays coherent
             write_oem_miniled_registry(enabled);

@@ -157,12 +157,20 @@ impl PowerArbiter {
                 } else {
                     updated_cfg.power_mode_battery = m;
                 }
-                crate::system::config::save_config(&updated_cfg);
+                crate::system::config::modify_config(|c| {
+                    c.power_mode = updated_cfg.power_mode.clone();
+                    c.power_mode_ac = updated_cfg.power_mode_ac.clone();
+                    c.power_mode_battery = updated_cfg.power_mode_battery.clone();
+                });
             }
             PowerIntentSource::AcPluggedIn => {
                 if updated_cfg.power_mode != target_mode {
                     updated_cfg.power_mode = target_mode;
-                    crate::system::config::save_config(&updated_cfg);
+                    crate::system::config::modify_config(|c| {
+                        c.power_mode = updated_cfg.power_mode.clone();
+                        c.power_mode_ac = updated_cfg.power_mode_ac.clone();
+                        c.power_mode_battery = updated_cfg.power_mode_battery.clone();
+                    });
                 }
             }
             PowerIntentSource::BatteryDischarged => {
@@ -171,7 +179,11 @@ impl PowerArbiter {
                         updated_cfg.power_mode_ac = updated_cfg.power_mode;
                     }
                     updated_cfg.power_mode = target_mode;
-                    crate::system::config::save_config(&updated_cfg);
+                    crate::system::config::modify_config(|c| {
+                        c.power_mode = updated_cfg.power_mode.clone();
+                        c.power_mode_ac = updated_cfg.power_mode_ac.clone();
+                        c.power_mode_battery = updated_cfg.power_mode_battery.clone();
+                    });
                 }
             }
             PowerIntentSource::HardwarePhysicalQKey(m) => {
@@ -181,7 +193,11 @@ impl PowerArbiter {
                 } else {
                     updated_cfg.power_mode_battery = m;
                 }
-                crate::system::config::save_config(&updated_cfg);
+                crate::system::config::modify_config(|c| {
+                    c.power_mode = updated_cfg.power_mode.clone();
+                    c.power_mode_ac = updated_cfg.power_mode_ac.clone();
+                    c.power_mode_battery = updated_cfg.power_mode_battery.clone();
+                });
             }
             _ => {}
         }

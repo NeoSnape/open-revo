@@ -49,7 +49,7 @@ pub fn save_lighting_state(st: &LightingPresetState) {
     if !st.hardware_override.enabled && current_override.enabled {
         cfg.lighting.hardware_override = current_override;
     }
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.lighting = cfg.lighting.clone());
 }
 
 static GLOBAL_LIGHTING: std::sync::OnceLock<SharedIteLightingManager> = std::sync::OnceLock::new();
@@ -1327,9 +1327,7 @@ impl IteLightingManager {
     /// Query the real-time physical/driver runtime state of all lighting zones (Keyboard, Lightbar, Hinge, Logo)
     pub fn apply_hardware_override_and_reinit(&self, override_cfg: LightingHardwareOverride) -> Result<(), String> {
         // 1. Save new override into config.json
-        let mut cfg = crate::system::config::load_config();
-        cfg.lighting.hardware_override = override_cfg.clone();
-        crate::system::config::save_config(&cfg);
+        crate::system::config::modify_config(|c| c.lighting.hardware_override = override_cfg.clone());
 
         // 2. Synchronize in-memory shared manager state immediately
         self.state.lock().hardware_override = override_cfg.clone();

@@ -246,7 +246,7 @@ pub fn spawn_hardware_state_restore(ec_for_restore: crate::driver::ec_bridge::Sh
                 crate::log_info!("MAIN", "Machine booted on DC power: aligning power mode to AC preference {} (was {})", target_mode, cfg.power_mode);
                 let mut updated_cfg = cfg.clone();
                 updated_cfg.power_mode = target_mode;
-                crate::system::config::save_config(&updated_cfg);
+                crate::system::config::modify_config(|c| c.power_mode = updated_cfg.power_mode.clone());
             }
             target_mode
         } else {
@@ -264,7 +264,10 @@ pub fn spawn_hardware_state_restore(ec_for_restore: crate::driver::ec_bridge::Sh
                         updated_cfg.power_mode_ac = updated_cfg.power_mode;
                     }
                     updated_cfg.power_mode = target_mode;
-                    crate::system::config::save_config(&updated_cfg);
+                    crate::system::config::modify_config(|c| {
+                        c.power_mode_ac = updated_cfg.power_mode_ac.clone();
+                        c.power_mode = updated_cfg.power_mode.clone();
+                    });
                 }
                 target_mode
             }

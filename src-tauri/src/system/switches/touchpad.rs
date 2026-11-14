@@ -145,9 +145,7 @@ pub fn start_touchpad_listener(app: tauri::AppHandle) {
                         last_known_state = Some(new_state);
 
                         // 1. Sync config
-                        let mut cfg = crate::system::config::load_config();
-                        cfg.touchpad_enabled = new_state;
-                        crate::system::config::save_config(&cfg);
+                        crate::system::config::modify_config(|c| c.touchpad_enabled = new_state);
 
                         // 2. Sync Touchpad register on supported hardware
                         if super::has_ec_device_switches() {

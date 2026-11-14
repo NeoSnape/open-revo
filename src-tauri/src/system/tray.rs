@@ -183,7 +183,11 @@ pub fn handle_tray_menu_event(
             } else {
                 cfg.power_mode_battery = 1;
             }
-            crate::system::config::save_config(&cfg);
+            crate::system::config::modify_config(|c| {
+                c.power_mode = cfg.power_mode.clone();
+                c.power_mode_ac = cfg.power_mode_ac.clone();
+                c.power_mode_battery = cfg.power_mode_battery.clone();
+            });
             update_tray_power_mode(1);
             crate::system::osd_window::wake_osd_if_enabled(&app_handle);
             let _ = app_handle.emit("physical-mode-switched", 1);
@@ -200,7 +204,11 @@ pub fn handle_tray_menu_event(
             } else {
                 cfg.power_mode_battery = 2;
             }
-            crate::system::config::save_config(&cfg);
+            crate::system::config::modify_config(|c| {
+                c.power_mode = cfg.power_mode.clone();
+                c.power_mode_ac = cfg.power_mode_ac.clone();
+                c.power_mode_battery = cfg.power_mode_battery.clone();
+            });
             update_tray_power_mode(2);
             crate::system::osd_window::wake_osd_if_enabled(&app_handle);
             let _ = app_handle.emit("physical-mode-switched", 2);
@@ -221,7 +229,11 @@ pub fn handle_tray_menu_event(
                 } else {
                     cfg.power_mode_battery = 3;
                 }
-                crate::system::config::save_config(&cfg);
+                crate::system::config::modify_config(|c| {
+                    c.power_mode = cfg.power_mode.clone();
+                    c.power_mode_ac = cfg.power_mode_ac.clone();
+                    c.power_mode_battery = cfg.power_mode_battery.clone();
+                });
                 update_tray_power_mode(3);
                 crate::system::osd_window::wake_osd_if_enabled(&app_handle);
                 let _ = app_handle.emit("physical-mode-switched", 3);
@@ -243,7 +255,11 @@ pub fn handle_tray_menu_event(
                 } else {
                     cfg.power_mode_battery = 4;
                 }
-                crate::system::config::save_config(&cfg);
+                crate::system::config::modify_config(|c| {
+                    c.power_mode = cfg.power_mode.clone();
+                    c.power_mode_ac = cfg.power_mode_ac.clone();
+                    c.power_mode_battery = cfg.power_mode_battery.clone();
+                });
                 update_tray_power_mode(4);
                 crate::system::osd_window::wake_osd_if_enabled(&app_handle);
                 let _ = app_handle.emit("physical-mode-switched", 4);
@@ -256,9 +272,7 @@ pub fn handle_tray_menu_event(
             let current = ec.is_fan_boost();
             let next = !current;
             ec.set_fan_boost(next);
-            let mut cfg = crate::system::config::load_config();
-            cfg.fan_boost = next;
-            crate::system::config::save_config(&cfg);
+            crate::system::config::modify_config(|c| c.fan_boost = next);
             update_tray_fan_boost(next);
             crate::system::osd_window::wake_osd_if_enabled(&app_handle);
             let _ = app_handle.emit("fan-boost-changed", next);

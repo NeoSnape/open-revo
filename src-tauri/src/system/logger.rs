@@ -111,7 +111,11 @@ pub fn init_from_cli() -> u8 {
         if let Some(ref f) = cli_filter {
             cfg.log_filter = Some(f.clone());
         }
-        crate::system::config::save_config(&cfg);
+        crate::system::config::modify_config(|c| {
+            c.log_enabled = cfg.log_enabled.clone();
+            c.log_level = cfg.log_level.clone();
+            c.log_filter = cfg.log_filter.clone();
+        });
         cfg.log_level
     } else {
         // This fork logs by default so a few days of use can be reviewed afterwards.

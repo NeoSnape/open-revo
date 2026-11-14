@@ -244,7 +244,11 @@ pub fn set_power_mode(mode: u8, app: AppHandle, ec_state: State<'_, SharedEcBrid
     } else {
         cfg.power_mode_battery = mode;
     }
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| {
+        c.power_mode = cfg.power_mode.clone();
+        c.power_mode_ac = cfg.power_mode_ac.clone();
+        c.power_mode_battery = cfg.power_mode_battery.clone();
+    });
     crate::update_tray_power_mode(mode);
     crate::system::osd_window::wake_osd_if_enabled(&app);
     let _ = app.emit("physical-mode-switched", mode);
@@ -265,9 +269,7 @@ pub fn set_fan_boost(
         return Ok(());
     }
     ec_state.lock().set_fan_boost(enable);
-    let mut cfg = crate::system::config::load_config();
-    cfg.fan_boost = enable;
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.fan_boost = enable);
     crate::update_tray_fan_boost(enable);
 
     crate::system::osd_window::wake_osd_if_enabled(&app);
@@ -293,7 +295,10 @@ pub fn set_battery_limit(limit: u8, ec_state: State<'_, SharedEcBridge>) -> Resu
     } else {
         "balance".to_string()
     };
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| {
+        c.battery_limit = cfg.battery_limit.clone();
+        c.battery_mode = cfg.battery_mode.clone();
+    });
     Ok(())
 }
 
@@ -565,7 +570,14 @@ pub fn set_sleep_guard_option(
         _ => return Err("Invalid sleep guard option".into()),
     }
     apply_sleep_guard_powercfg(&option, enable);
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| {
+        c.sleep_disconnect_net = cfg.sleep_disconnect_net.clone();
+        c.sleep_block_away = cfg.sleep_block_away.clone();
+        c.sleep_ignore_sysreq = cfg.sleep_ignore_sysreq.clone();
+        c.sleep_disable_wake_timers = cfg.sleep_disable_wake_timers.clone();
+        c.sleep_deep_sleep = cfg.sleep_deep_sleep.clone();
+        c.sleep_hibernate_30m = cfg.sleep_hibernate_30m.clone();
+    });
     Ok(get_power_settings(ec_state))
 }
 
@@ -583,7 +595,15 @@ pub fn set_master_sleep_guard(
     cfg.sleep_deep_sleep = enable;
     cfg.sleep_hibernate_30m = enable;
     apply_all_sleep_guard(enable);
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| {
+        c.sleep_guard_enabled = cfg.sleep_guard_enabled.clone();
+        c.sleep_disconnect_net = cfg.sleep_disconnect_net.clone();
+        c.sleep_block_away = cfg.sleep_block_away.clone();
+        c.sleep_ignore_sysreq = cfg.sleep_ignore_sysreq.clone();
+        c.sleep_disable_wake_timers = cfg.sleep_disable_wake_timers.clone();
+        c.sleep_deep_sleep = cfg.sleep_deep_sleep.clone();
+        c.sleep_hibernate_30m = cfg.sleep_hibernate_30m.clone();
+    });
     Ok(get_power_settings(ec_state))
 }
 
@@ -592,9 +612,7 @@ pub fn set_sleep_auto_office(
     enable: bool,
     ec_state: State<'_, SharedEcBridge>,
 ) -> Result<PowerSettingsInfo, String> {
-    let mut cfg = crate::system::config::load_config();
-    cfg.sleep_auto_office = enable;
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.sleep_auto_office = enable);
     Ok(get_power_settings(ec_state))
 }
 
@@ -609,10 +627,11 @@ pub fn set_battery_mode(
         _ => 80, // "balance"
     };
 
-    let mut cfg = crate::system::config::load_config();
-    cfg.battery_mode = mode.clone();
-    cfg.battery_limit = limit;
-    crate::system::config::save_config(&cfg);
+    let cfg = crate::system::config::modify_config(|c| {
+        c.battery_mode = mode.clone();
+        c.battery_limit = limit;
+        c.clone()
+    });
 
     ec_state.lock().apply_battery_limit_with_override(limit, cfg.battery_hardware_limit_enabled);
 
@@ -624,9 +643,7 @@ pub fn set_battery_hardware_limit(
     enable: bool,
     ec_state: State<'_, SharedEcBridge>,
 ) -> Result<PowerSettingsInfo, String> {
-    let mut cfg = crate::system::config::load_config();
-    cfg.battery_hardware_limit_enabled = enable;
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.battery_hardware_limit_enabled = enable);
 
     ec_state.lock().set_battery_hardware_limit_override(enable);
 
@@ -667,7 +684,11 @@ pub fn set_power_option(
         }
         _ => return Err("Invalid power option".into()),
     }
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| {
+        c.usb_charge_enabled = cfg.usb_charge_enabled.clone();
+        c.ac_recovery_enabled = cfg.ac_recovery_enabled.clone();
+        c.high_perf_scheme = cfg.high_perf_scheme.clone();
+    });
     Ok(get_power_settings(ec_state))
 }
 
@@ -720,9 +741,7 @@ pub fn set_active_windows_power_scheme(guid: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         crate::system::power::ppm::set_active_windows_power_scheme(&guid)?;
-        let mut cfg = crate::system::config::load_config();
-        cfg.preferred_power_scheme = Some(guid.trim().to_string());
-        crate::system::config::save_config(&cfg);
+        crate::system::config::modify_config(|c| c.preferred_power_scheme = Some(guid.trim().to_string()));
         Ok(())
     }
     #[cfg(not(target_os = "windows"))]

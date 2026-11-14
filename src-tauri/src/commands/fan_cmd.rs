@@ -49,9 +49,10 @@ pub fn set_preset_fan_policy(policy: String) -> Result<PresetFanInfo, String> {
     if policy != crate::machine::FAN_POLICY_TUNED && policy != crate::machine::FAN_POLICY_OFFICIAL {
         return Err(format!("unknown fan policy '{}'", policy));
     }
-    let mut cfg = crate::system::config::load_config();
-    cfg.preset_fan_policy = policy;
-    crate::system::config::save_config(&cfg);
+    let cfg = crate::system::config::modify_config(|c| {
+        c.preset_fan_policy = policy;
+        c.clone()
+    });
     if (1..=3).contains(&cfg.power_mode) && !cfg.fan_boost {
         crate::system::power::apply_mode_fan_table(cfg.power_mode);
     }

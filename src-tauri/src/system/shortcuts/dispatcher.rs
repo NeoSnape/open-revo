@@ -22,7 +22,7 @@ pub fn dispatch_action(app: AppHandle, binding: ShortcutBinding) {
                 let next_boost = !current_boost;
                 if hal.set_fan_boost(next_boost).is_ok() {
                     cfg.fan_boost = next_boost;
-                    crate::system::config::save_config(&cfg);
+                    crate::system::config::modify_config(|c| c.fan_boost = cfg.fan_boost.clone());
                     crate::log_info!("SHORTCUTS", "Toggled Fan Boost: {} -> {}", current_boost, next_boost);
                     if osd {
                         crate::system::osd_window::wake_osd_if_enabled(&app);
@@ -52,7 +52,7 @@ pub fn dispatch_action(app: AppHandle, binding: ShortcutBinding) {
                 };
                 if hal.set_performance_mode(hw_mode).is_ok() {
                     cfg.power_mode = next_mode;
-                    crate::system::config::save_config(&cfg);
+                    crate::system::config::modify_config(|c| c.power_mode = cfg.power_mode.clone());
                     crate::update_tray_power_mode(next_mode);
                     crate::log_info!("SHORTCUTS", "Cycled Power Mode: {} -> {}", current_mode, next_mode);
                     if osd {
@@ -75,9 +75,7 @@ pub fn dispatch_action(app: AppHandle, binding: ShortcutBinding) {
                     _ => HardwarePowerMode::Balance,
                 };
                 if hal.set_performance_mode(hw_mode).is_ok() {
-                    let mut cfg = crate::system::config::load_config();
-                    cfg.power_mode = target_mode;
-                    crate::system::config::save_config(&cfg);
+                    crate::system::config::modify_config(|c| c.power_mode = target_mode);
                     crate::update_tray_power_mode(target_mode);
                     crate::log_info!("SHORTCUTS", "Set Power Mode: {}", target_mode);
                     if osd {

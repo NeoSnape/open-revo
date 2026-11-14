@@ -316,9 +316,7 @@ impl EcBridge {
         }
 
         // Proactively align user config and tray icon
-        let mut cfg = crate::system::config::load_config();
-        cfg.fan_boost = enable;
-        crate::system::config::save_config(&cfg);
+        crate::system::config::modify_config(|c| c.fan_boost = enable);
         crate::update_tray_fan_boost(enable);
 
         // Apply fan boost to hardware driver (Tongfang WMI EC or Declarative HAL)
@@ -336,9 +334,7 @@ impl EcBridge {
         }
 
         // Proactively align user config and tray icon without re-pulsing hardware EC
-        let mut cfg = crate::system::config::load_config();
-        cfg.fan_boost = enable;
-        crate::system::config::save_config(&cfg);
+        crate::system::config::modify_config(|c| c.fan_boost = enable);
         crate::update_tray_fan_boost(enable);
     }
 

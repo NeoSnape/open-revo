@@ -21,9 +21,7 @@ pub fn is_enabled() -> bool {
 
 /// Persist and apply the global shortcut master switch.
 pub fn set_enabled(enabled: bool) {
-    let mut cfg = crate::system::config::load_config();
-    cfg.shortcuts_enabled = enabled;
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.shortcuts_enabled = enabled);
     ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
     crate::log_info!("SHORTCUTS", "Global shortcuts {}", if enabled { "enabled" } else { "disabled" });
 }

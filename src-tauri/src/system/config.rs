@@ -1172,15 +1172,10 @@ pub fn load_config() -> AppConfig {
     cfg
 }
 
-/// Updates the in-memory configuration cache and persists to disk atomically.
-pub fn save_config(cfg: &AppConfig) {
-    let mut guard = CONFIG_CACHE.write();
-    *guard = Some(cfg.clone());
-    save_config_to_disk(cfg);
-}
-
-/// Atomically modifies the active configuration in-place under an exclusive write lock,
-/// then persists the updated configuration to disk. Prevents multi-module RMW race conditions.
+/// The only way to change the configuration: `f` edits the live config under an exclusive lock and
+/// the result is persisted. There is deliberately no "save this whole struct" function: callers used
+/// to load a copy, work for a while and save it back, rolling back whatever had changed meanwhile.
+/// Keep `f` trivial (plain assignments); it must not call `load_config` or anything that does.
 pub fn modify_config<F: FnOnce(&mut AppConfig) -> R, R>(f: F) -> R {
     let mut guard = CONFIG_CACHE.write();
     let mut cfg = if let Some(ref current) = *guard {

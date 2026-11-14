@@ -52,7 +52,7 @@ pub fn get_gpu_mode_info(
     } else if hw.hardware_read && hw.current_mode != "unknown" {
         if cfg.gpu_mode != hw.current_mode {
             cfg.gpu_mode = hw.current_mode.clone();
-            crate::system::config::save_config(&cfg);
+            crate::system::config::modify_config(|c| c.gpu_mode = cfg.gpu_mode.clone());
         }
         hw.current_mode.clone()
     } else {
@@ -105,9 +105,7 @@ pub fn set_gpu_mode(
         crate::driver::uefi_nvram::trigger_graceful_reboot(1800)?;
     }
 
-    let mut cfg = crate::system::config::load_config();
-    cfg.gpu_mode = mode;
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.gpu_mode = mode);
 
     let info = get_gpu_mode_info(gpu_state);
     let _ = app.emit("gpu-mode-changed", info.clone());
@@ -131,9 +129,7 @@ pub fn set_experimental_igpu_unlock(
     unlock: bool,
     gpu_state: State<'_, SharedGpuBridge>,
 ) -> Result<GpuModeInfo, String> {
-    let mut cfg = crate::system::config::load_config();
-    cfg.allow_experimental_igpu_only = unlock;
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.allow_experimental_igpu_only = unlock);
 
     let info = get_gpu_mode_info(gpu_state);
     let _ = app.emit("gpu-mode-changed", info.clone());
@@ -236,7 +232,7 @@ pub fn reset_custom_profile_to_defaults() -> crate::system::config::CustomProfil
     let mut cfg = crate::system::config::load_config();
     let model_default = crate::system::model_engine::get_model_default_custom_profile();
     cfg.custom_profile = model_default.clone();
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.custom_profile = cfg.custom_profile.clone());
     model_default
 }
 
@@ -276,7 +272,12 @@ pub fn apply_custom_profile(
     } else {
         cfg.power_mode_battery = 4;
     }
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| {
+        c.custom_profile = cfg.custom_profile.clone();
+        c.power_mode = cfg.power_mode.clone();
+        c.power_mode_ac = cfg.power_mode_ac.clone();
+        c.power_mode_battery = cfg.power_mode_battery.clone();
+    });
 
     ec_state.lock().set_power_mode(4);
 
@@ -313,10 +314,11 @@ pub fn toggle_fan_isolated_output(
     cpu_curve: Option<Vec<crate::system::config::FanCurvePoint>>,
     gpu_curve: Option<Vec<crate::system::config::FanCurvePoint>>,
 ) -> Result<bool, String> {
-    let mut cfg = crate::system::config::load_config();
-    cfg.custom_profile.fan_isolated_output = enable;
-    cfg.custom_profile.fan_curve_enabled = enable;
-    crate::system::config::save_config(&cfg);
+    let cfg = crate::system::config::modify_config(|c| {
+        c.custom_profile.fan_isolated_output = enable;
+        c.custom_profile.fan_curve_enabled = enable;
+        c.clone()
+    });
 
     if enable && ec_state.lock().is_fan_boost() {
         crate::log_info!("EC_TUNING", "toggle_fan_isolated_output: Enabling fan isolated output while Fan Boost is ON. Terminating Fan Boost to yield to custom curve!");
@@ -347,7 +349,10 @@ pub fn toggle_fan_ramp_rate(enable: bool, speed_ms: Option<u16>) -> Result<bool,
     let ok = crate::driver::wmi_ec::set_fan_ramp_rate(enable, ms);
     cfg.custom_profile.fan_ramp_rate = enable;
     cfg.custom_profile.fan_ramp_speed_ms = ms;
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| {
+        c.custom_profile.fan_ramp_rate = cfg.custom_profile.fan_ramp_rate.clone();
+        c.custom_profile.fan_ramp_speed_ms = cfg.custom_profile.fan_ramp_speed_ms.clone();
+    });
     crate::log_info!("EC_TUNING", "toggle_fan_ramp_rate: enable={}, speed={}ms -> ok={}", enable, ms, ok);
     Ok(ok)
 }
@@ -401,7 +406,13 @@ pub fn set_active_profile_id(
         cfg.power_mode = 4;
         ec_state.lock().set_power_mode(4);
     }
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| {
+        c.active_profile_id = cfg.active_profile_id.clone();
+        c.custom_profile = cfg.custom_profile.clone();
+        c.power_mode_ac = cfg.power_mode_ac.clone();
+        c.power_mode_battery = cfg.power_mode_battery.clone();
+        c.power_mode = cfg.power_mode.clone();
+    });
     Ok(target)
 }
 
@@ -416,7 +427,10 @@ pub fn save_profile_preset(
     if cfg.active_profile_id == preset.id {
         cfg.custom_profile = preset.profile.clone();
         cfg.power_mode = 4;
-        crate::system::config::save_config(&cfg);
+        crate::system::config::modify_config(|c| {
+            c.custom_profile = cfg.custom_profile.clone();
+            c.power_mode = cfg.power_mode.clone();
+        });
     }
     crate::system::power_mode::sync_oem_mode4_profile(&preset.profile);
     Ok(())
@@ -506,7 +520,13 @@ pub fn reset_profile_preset(id: String) -> Result<crate::system::config::CustomP
         cfg.cpu_pl1_max = Some(p1_max.clamp(15, 255) as u16);
         cfg.cpu_pl2_max = Some(p2_max.clamp(15, 255) as u16);
         cfg.cpu_pl4_max = Some(p4_max.clamp(15, 255) as u16);
-        crate::system::config::save_config(&cfg);
+        crate::system::config::modify_config(|c| {
+            c.custom_profile = cfg.custom_profile.clone();
+            c.cpu_temp_target_max = cfg.cpu_temp_target_max.clone();
+            c.cpu_pl1_max = cfg.cpu_pl1_max.clone();
+            c.cpu_pl2_max = cfg.cpu_pl2_max.clone();
+            c.cpu_pl4_max = cfg.cpu_pl4_max.clone();
+        });
         crate::system::power_mode::sync_oem_mode4_profile(&target.profile);
     }
 
@@ -569,7 +589,7 @@ pub fn delete_profile_preset(id: String) -> Result<(), String> {
     let mut cfg = crate::system::config::load_config();
     if cfg.active_profile_id == id {
         cfg.active_profile_id = "preset_silent_beast".to_string();
-        crate::system::config::save_config(&cfg);
+        crate::system::config::modify_config(|c| c.active_profile_id = cfg.active_profile_id.clone());
     }
     Ok(())
 }

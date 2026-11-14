@@ -14,9 +14,7 @@ pub fn set_win_key_locked(locked: bool) -> bool {
             crate::driver::wmi_ec::send_winkey_lock_trigger();
         }
     }
-    let mut cfg = crate::system::config::load_config();
-    cfg.win_key_locked = locked;
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.win_key_locked = locked);
     hooks::is_win_key_locked()
 }
 

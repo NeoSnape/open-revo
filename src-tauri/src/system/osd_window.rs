@@ -246,7 +246,12 @@ fn handle_set_osd(
     cfg.osd_theme = new_theme.clone();
     cfg.osd_scale = new_scale.clone();
     cfg.osd_position = new_position.clone();
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| {
+        c.osd_enabled = cfg.osd_enabled.clone();
+        c.osd_theme = cfg.osd_theme.clone();
+        c.osd_scale = cfg.osd_scale.clone();
+        c.osd_position = cfg.osd_position.clone();
+    });
 
     update_osd_position(app, &new_position);
 

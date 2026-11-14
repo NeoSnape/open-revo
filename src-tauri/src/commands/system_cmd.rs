@@ -204,9 +204,10 @@ pub fn set_unlock_battery_power_limit(
     app: AppHandle,
     ec_state: State<'_, SharedEcBridge>,
 ) -> Result<bool, String> {
-    let mut cfg = crate::system::config::load_config();
-    cfg.unlock_battery_power_limit = enable;
-    crate::system::config::save_config(&cfg);
+    let cfg = crate::system::config::modify_config(|c| {
+        c.unlock_battery_power_limit = enable;
+        c.clone()
+    });
     crate::log_info!("POWER", "Battery power limit unlock state changed to: {}", enable);
 
     // If disabled while running on battery/Type-C and currently in Beast (3) or Custom (4),
@@ -219,8 +220,7 @@ pub fn set_unlock_battery_power_limit(
             cfg.power_mode,
             target_mode
         );
-        cfg.power_mode = target_mode;
-        crate::system::config::save_config(&cfg);
+        crate::system::config::modify_config(|c| c.power_mode = target_mode);
         ec_state.lock().set_power_mode(target_mode);
         crate::update_tray_power_mode(target_mode);
         let _ = app.emit("physical-mode-switched", target_mode);
@@ -236,9 +236,7 @@ pub fn set_unlock_battery_power_limit(
 pub fn set_autostart_enabled(enabled: bool) -> Result<bool, String> {
     let res = autostart::set_autostart_enabled(enabled);
     if let Ok(val) = res {
-        let mut cfg = crate::system::config::load_config();
-        cfg.autostart = val;
-        crate::system::config::save_config(&cfg);
+        crate::system::config::modify_config(|c| c.autostart = val);
     }
     res
 }
@@ -249,9 +247,10 @@ pub fn toggle_oem_service(
     ec_state: State<'_, SharedEcBridge>,
     gpu_state: State<'_, SharedGpuBridge>,
 ) -> Result<HardwareState, String> {
-    let mut cfg = crate::system::config::load_config();
-    cfg.takeover_oem = take_over;
-    crate::system::config::save_config(&cfg);
+    let mut cfg = crate::system::config::modify_config(|c| {
+        c.takeover_oem = take_over;
+        c.clone()
+    });
 
     if take_over {
         let _ = service_mgr::pause_oem_services();
@@ -261,9 +260,7 @@ pub fn toggle_oem_service(
         if !autostart::is_autostart_enabled() {
             match autostart::set_autostart_enabled(true) {
                 Ok(v) => {
-                    let mut c = crate::system::config::load_config();
-                    c.autostart = v;
-                    crate::system::config::save_config(&c);
+                    crate::system::config::modify_config(|c| c.autostart = v);
                     cfg.autostart = v;
                     crate::log_info!("TAKEOVER", "Autostart enabled together with OEM takeover");
                 }
@@ -371,7 +368,7 @@ pub fn set_log_filter(filter: Option<String>) -> LogStatus {
     let mut cfg = crate::system::config::load_config();
     crate::system::logger::set_log_filter(filter.as_deref());
     cfg.log_filter = crate::system::logger::get_log_filter();
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| c.log_filter = cfg.log_filter.clone());
 
     get_log_status()
 }
@@ -389,7 +386,10 @@ pub fn set_log_level(level: u8) -> LogStatus {
         crate::set_cli_log_active(true);
         crate::system::logger::set_log_level(level);
     }
-    crate::system::config::save_config(&cfg);
+    crate::system::config::modify_config(|c| {
+        c.log_level = cfg.log_level.clone();
+        c.log_enabled = cfg.log_enabled.clone();
+    });
 
     if autostart::is_autostart_enabled() {
         let _ = autostart::set_autostart_enabled(true);

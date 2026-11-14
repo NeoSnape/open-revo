@@ -356,12 +356,12 @@ pub fn restore_official_power_plan() -> Result<String, String> {
         let _ = run_powercfg(&["/setactive", "scheme_current"]);
 
         // Reset preferred scheme in config to None
-        let mut cfg = crate::system::config::load_config();
-        cfg.preferred_power_scheme = None;
-        cfg.cpu_safety_guard = false;
-        cfg.cpu_freq_limit = 0;
-        cfg.cpu_freq_crash_guard = false;
-        crate::system::config::save_config(&cfg);
+        crate::system::config::modify_config(|c| {
+            c.preferred_power_scheme = None;
+            c.cpu_safety_guard = false;
+            c.cpu_freq_limit = 0;
+            c.cpu_freq_crash_guard = false;
+        });
 
         crate::log_info!("POWER_PPM", "Official factory power plan restoration succeeded");
         Ok(return_msg)

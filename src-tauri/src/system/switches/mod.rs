@@ -232,7 +232,16 @@ pub fn get_switches_state() -> QuickSwitchesState {
         changed = true;
     }
     if changed {
-        crate::system::config::save_config(&cfg);
+        crate::system::config::modify_config(|c| {
+            c.fn_lock_enabled = cfg.fn_lock_enabled.clone();
+            c.win_key_locked = cfg.win_key_locked.clone();
+            c.camera_enabled = cfg.camera_enabled.clone();
+            c.mic_enabled = cfg.mic_enabled.clone();
+            c.keep_awake_enabled = cfg.keep_awake_enabled.clone();
+            c.touchpad_enabled = cfg.touchpad_enabled.clone();
+            c.wifi_enabled = cfg.wifi_enabled.clone();
+            c.bluetooth_enabled = cfg.bluetooth_enabled.clone();
+        });
     }
 
     QuickSwitchesState {
@@ -381,6 +390,22 @@ pub fn set_switch(switch_name: &str, enable: bool) -> Result<bool, String> {
         _ => return Err(format!("Unknown switch: {}", switch_name)),
     }
 
-    crate::system::config::save_config(&cfg);
+    // Write back only what this switch owns: `cfg` is a snapshot taken before the (possibly slow)
+    // toggle above and must not roll back anything else changed in the meantime.
+    crate::system::config::modify_config(|c| match switch_name {
+        "wifi" => {
+            c.wifi_enabled = cfg.wifi_enabled;
+            c.wifi_adapter_name = cfg.wifi_adapter_name.clone();
+        }
+        "bluetooth" => c.bluetooth_enabled = cfg.bluetooth_enabled,
+        "touchpad" => c.touchpad_enabled = cfg.touchpad_enabled,
+        "camera" => c.camera_enabled = cfg.camera_enabled,
+        "win_key" => c.win_key_locked = cfg.win_key_locked,
+        "mic" => c.mic_enabled = cfg.mic_enabled,
+        "keep_awake" => c.keep_awake_enabled = cfg.keep_awake_enabled,
+        "fn_lock" => c.fn_lock_enabled = cfg.fn_lock_enabled,
+        "osd" => c.osd_enabled = cfg.osd_enabled,
+        _ => {}
+    });
     Ok(enable)
 }
