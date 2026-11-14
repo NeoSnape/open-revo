@@ -143,11 +143,7 @@ pub fn collect_hardware_state(
         monitors: display::get_all_monitors(),
         auto_min_refresh_on_battery: cfg.auto_min_refresh_on_battery,
         unlock_battery_power_limit: cfg.unlock_battery_power_limit,
-        win_key_locked: if let Some(val) = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_STATUS_BYTE) {
-            (val & crate::driver::wmi_ec::STATUS_WINLOCK) != 0
-        } else {
-            hooks::is_win_key_locked()
-        },
+        win_key_locked: crate::system::ec_sampler::latest().win_key_locked().unwrap_or_else(hooks::is_win_key_locked),
         is_mock,
         oem_running,
         oem_installed,
@@ -159,7 +155,7 @@ pub fn collect_hardware_state(
         gpu_name,
         model_name: get_machine_model(),
         power_presets: get_factory_power_presets(has_gpu),
-        is_dc_online: is_dc_round_plugged_in(),
+        is_dc_online: crate::commands::power_cmd::is_dc_round_plugged_in_sampled(),
         cpu_power_w: cpu.get_power_w(),
         gpu_power_w,
     }

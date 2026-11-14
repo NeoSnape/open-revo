@@ -61,6 +61,105 @@ fn settle_fan_rpm(raw: u16, stopped_reads: &mut u8, slot: &mut u16) {
     }
 }
 
+/// The registers `absorb_slow_sample` expects, in this order (read by `system::ec_sampler` every 2 s).
+pub const SLOW_REGISTERS: [u16; 8] = [
+    wmi_ec::ADDR_SUPER_PERFORMANCE,       // Fan Boost Hardware Clamp (Bit 6: 0x40)
+    wmi_ec::ADDR_MODE_INDEX,              // Operating Mode (1: Office, 0: Balance, 2: Turbo)
+    wmi_ec::ADDR_BATTERY_PROTECTION_MODE, // Battery Mode | Touchpad mask
+    wmi_ec::ADDR_BATTERY_LIMIT_UP,        // Battery Limit Upper
+    wmi_ec::ADDR_MAIN_FAN_RPM_B1,         // CPU Fan RPM High
+    wmi_ec::ADDR_MAIN_FAN_RPM_B2,         // CPU Fan RPM Low
+    wmi_ec::ADDR_SECOND_FAN_RPM_B1,       // GPU Fan RPM High
+    wmi_ec::ADDR_SECOND_FAN_RPM_B2,       // GPU Fan RPM Low
+];
+
+/// Debounce state for the "fan stopped" readings, owned by the sampler thread.
+#[derive(Default)]
+pub struct RpmFilter {
+    cpu_stopped_reads: u8,
+    gpu_stopped_reads: u8,
+}
+
+pub type SharedStateCache = Arc<Mutex<HardwareStateCache>>;
+
+/// Fold one reading of `SLOW_REGISTERS` into the state cache (fan boost, Turbo detection, battery
+/// limit, fan rpm) and run the battery-gate watchdog. Used to be the body of a poller thread that
+/// every `EcBridge::new` started again.
+pub fn absorb_slow_sample(cache: &SharedStateCache, bytes: &[u8], rpm: &mut RpmFilter) {
+    if bytes.len() != SLOW_REGISTERS.len() {
+        return;
+    }
+    let raw_fan_clamp = bytes[0];
+    let raw_mode = bytes[1];
+    let bat_mode_byte = bytes[2];
+    let battery_up = bytes[3];
+    let cpu_rpm_high = bytes[4] as u16;
+    let cpu_rpm_low = bytes[5] as u16;
+    let gpu_rpm_high = bytes[6] as u16;
+    let gpu_rpm_low = bytes[7] as u16;
+
+    let now = Instant::now();
+    let mut c = cache.lock();
+
+    // 1. Fan Boost Hardware Clamp - Direct zero-latency hardware clamp state
+    if now >= c.fan_boost_cooldown_until {
+        c.fan_boost = (raw_fan_clamp & wmi_ec::FAN_BOOST_CLAMP_BIT) != 0;
+    }
+
+    // 2. Power Mode - Respect user action cooldown window!
+    // In Custom Mode (4), raw_mode is purposefully set to base performance (0x00 or 0x10)
+    // by OpenRevo custom profile, NOT an autonomous EC mode switch.
+    // We must NEVER let the poller misinterpret 0 as Balance and revert Custom Mode!
+    if now >= c.power_mode_cooldown_until && c.power_mode != 4 {
+        let mode_bits = raw_mode & 0x1E;
+        if (mode_bits & 0x10) != 0 {
+            c.power_mode = 3; // Turbo
+        }
+    }
+
+    // 3. Battery Limit - Respect cooldown window!
+    if now >= c.battery_limit_cooldown_until {
+        let clean_mode = bat_mode_byte & !0x08; // Mask out touchpad enable bit (0x08)
+        if clean_mode == 0x21 || (clean_mode & 0xF0) == 0x20 || (battery_up <= 65 && battery_up > 0) {
+            c.battery_limit = 60;
+        } else if clean_mode == 0x11 || (clean_mode & 0xF0) == 0x10 || (battery_up <= 85 && battery_up > 65) {
+            c.battery_limit = 80;
+        } else if clean_mode == 0x01 || battery_up >= 95 || (clean_mode == 0 && battery_up == 0) {
+            c.battery_limit = 100;
+        } else if battery_up > 0 && battery_up <= 100 {
+            c.battery_limit = battery_up;
+        }
+    }
+
+    // 4. Fan RPMs (Always update with real RPM readings)
+    let cpu_rpm = (cpu_rpm_high << 8) | cpu_rpm_low;
+    settle_fan_rpm(cpu_rpm, &mut rpm.cpu_stopped_reads, &mut c.cpu_fan_rpm);
+
+    let gpu_rpm = (gpu_rpm_high << 8) | gpu_rpm_low;
+    settle_fan_rpm(gpu_rpm, &mut rpm.gpu_stopped_reads, &mut c.gpu_fan_rpm);
+
+    // 5. Battery Gate Watchdog: Protect platform override from accidental drop (Tongfang platforms only)
+    if now >= c.battery_limit_cooldown_until {
+        let cfg_snap = crate::system::config::load_config();
+        if cfg_snap.battery_hardware_limit_enabled && c.battery_limit < 95 {
+            if let Some(cur_plat_id) = wmi_ec::wmi_read_ec(wmi_ec::ADDR_PLATFORM_REAL_ID) {
+                if cur_plat_id != 0x04 {
+                    crate::log_warn!(
+                        "EC_WATCHDOG",
+                        "Battery hardware gate dropped (platform code 0x{:02X})! Auto-healing platform override...",
+                        cur_plat_id
+                    );
+                    let _ = wmi_ec::wmi_write_ec(wmi_ec::ADDR_PLATFORM_REAL_ID, 0x04);
+                    let _ = wmi_ec::wmi_write_ec(wmi_ec::ADDR_BATTERY_PLATFORM_OVERRIDE, wmi_ec::BATTERY_OVERRIDE_RESET_VALUE);
+                    let _ = wmi_ec::wmi_write_ec(wmi_ec::ADDR_BATTERY_LIMIT_UP, c.battery_limit);
+                    let down = if c.battery_limit > 5 { c.battery_limit - 5 } else { c.battery_limit };
+                    let _ = wmi_ec::wmi_write_ec(wmi_ec::ADDR_BATTERY_LIMIT_DOWN, down);
+                }
+            }
+        }
+    }
+}
+
 impl EcBridge {
     pub fn new(conflict: bool) -> Self {
         let initial_cfg = crate::system::config::load_config();
@@ -83,131 +182,7 @@ impl EcBridge {
         initial_cache.battery_limit_cooldown_until = Instant::now() + Duration::from_secs(5);
 
         let cache = Arc::new(Mutex::new(initial_cache));
-        let cache_for_poller = Arc::clone(&cache);
-
-        // Dedicated background poller thread
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(500));
-
-            let register_list = [
-                wmi_ec::ADDR_SUPER_PERFORMANCE,       // Fan Boost Hardware Clamp (Bit 6: 0x40)
-                wmi_ec::ADDR_MODE_INDEX,              // Operating Mode (1: Office, 0: Balance, 2: Turbo)
-                wmi_ec::ADDR_BATTERY_PROTECTION_MODE, // Battery Mode | Touchpad mask
-                wmi_ec::ADDR_BATTERY_LIMIT_UP,        // Battery Limit Upper
-                wmi_ec::ADDR_MAIN_FAN_RPM_B1,         // CPU Fan RPM High
-                wmi_ec::ADDR_MAIN_FAN_RPM_B2,         // CPU Fan RPM Low
-                wmi_ec::ADDR_SECOND_FAN_RPM_B1,       // GPU Fan RPM High
-                wmi_ec::ADDR_SECOND_FAN_RPM_B2,       // GPU Fan RPM Low
-            ];
-            let mut cpu_stopped_reads = 0u8;
-            let mut gpu_stopped_reads = 0u8;
-
-            loop {
-                if !wmi_ec::is_acpi_driver_available() {
-                    let hal = crate::hal::get_hardware_driver();
-                    if hal.kind() != crate::hal::DriverKind::TongfangAcpi && hal.is_hardware_supported() {
-                        if let Ok((cpu_rpm, gpu_rpm)) = hal.read_fan_rpm() {
-                            let mut c = cache_for_poller.lock();
-                            if cpu_rpm > 0 {
-                                c.cpu_fan_rpm = cpu_rpm;
-                            }
-                            if gpu_rpm > 0 {
-                                c.gpu_fan_rpm = gpu_rpm;
-                            }
-                        }
-                        // Ultrabooks do not possess autonomous physical rocker switches for power mode.
-                        // Performance mode on ultrabooks is managed authoritatively by OpenRevo software.
-                        // We must NEVER let periodic background polling blindly overwrite c.power_mode,
-                        // which caused the catastrophic 5-second mode revert back to Balance!
-                    }
-                    thread::sleep(Duration::from_millis(1500));
-                    continue;
-                }
-
-                if let Some(bytes) = wmi_ec::wmi_batch_read_ec(&register_list) {
-                    if bytes.len() == 8 {
-                        let raw_fan_clamp = bytes[0];
-                        let raw_mode = bytes[1];
-                        let bat_mode_byte = bytes[2];
-                        let battery_up = bytes[3];
-                        let cpu_rpm_high = bytes[4] as u16;
-                        let cpu_rpm_low = bytes[5] as u16;
-                        let gpu_rpm_high = bytes[6] as u16;
-                        let gpu_rpm_low = bytes[7] as u16;
-
-                        let now = Instant::now();
-                        let mut c = cache_for_poller.lock();
-
-                        // 1. Fan Boost Hardware Clamp - Direct zero-latency hardware clamp state
-                        if now >= c.fan_boost_cooldown_until {
-                            c.fan_boost = (raw_fan_clamp & wmi_ec::FAN_BOOST_CLAMP_BIT) != 0;
-                        }
-
-                        // 2. Power Mode - Respect user action cooldown window!
-                        // In Custom Mode (4), raw_mode is purposefully set to base performance (0x00 or 0x10)
-                        // by OpenRevo custom profile, NOT an autonomous EC mode switch.
-                        // We must NEVER let the poller misinterpret 0 as Balance and revert Custom Mode!
-                        if now >= c.power_mode_cooldown_until && c.power_mode != 4 {
-                            let mode_bits = raw_mode & 0x1E;
-                            if (mode_bits & 0x10) != 0 {
-                                c.power_mode = 3; // Turbo
-                            }
-                        }
-
-                        // 3. Battery Limit - Respect cooldown window!
-                        if now >= c.battery_limit_cooldown_until {
-                            let clean_mode = bat_mode_byte & !0x08; // Mask out touchpad enable bit (0x08)
-                            if clean_mode == 0x21 || (clean_mode & 0xF0) == 0x20 || (battery_up <= 65 && battery_up > 0) {
-                                c.battery_limit = 60;
-                            } else if clean_mode == 0x11 || (clean_mode & 0xF0) == 0x10 || (battery_up <= 85 && battery_up > 65) {
-                                c.battery_limit = 80;
-                            } else if clean_mode == 0x01 || battery_up >= 95 || (clean_mode == 0 && battery_up == 0) {
-                                c.battery_limit = 100;
-                            } else if battery_up > 0 && battery_up <= 100 {
-                                c.battery_limit = battery_up;
-                            }
-                        }
-
-                        // 4. Fan RPMs (Always update with real RPM readings)
-                        let cpu_rpm = (cpu_rpm_high << 8) | cpu_rpm_low;
-                        settle_fan_rpm(cpu_rpm, &mut cpu_stopped_reads, &mut c.cpu_fan_rpm);
-
-                        let gpu_rpm = (gpu_rpm_high << 8) | gpu_rpm_low;
-                        settle_fan_rpm(gpu_rpm, &mut gpu_stopped_reads, &mut c.gpu_fan_rpm);
-
-                        // 5. Battery Gate Watchdog: Protect platform override from accidental drop (Tongfang platforms only)
-                        if now >= c.battery_limit_cooldown_until {
-                            let cfg_snap = crate::system::config::load_config();
-                            if cfg_snap.battery_hardware_limit_enabled && c.battery_limit < 95 {
-                                if let Some(cur_plat_id) = wmi_ec::wmi_read_ec(wmi_ec::ADDR_PLATFORM_REAL_ID) {
-                                    if cur_plat_id != 0x04 {
-                                        crate::log_warn!(
-                                            "EC_WATCHDOG",
-                                            "Battery hardware gate dropped (platform code 0x{:02X})! Auto-healing platform override...",
-                                            cur_plat_id
-                                        );
-                                        let _ = wmi_ec::wmi_write_ec(wmi_ec::ADDR_PLATFORM_REAL_ID, 0x04);
-                                        let _ = wmi_ec::wmi_write_ec(wmi_ec::ADDR_BATTERY_PLATFORM_OVERRIDE, wmi_ec::BATTERY_OVERRIDE_RESET_VALUE);
-                                        let _ = wmi_ec::wmi_write_ec(wmi_ec::ADDR_BATTERY_LIMIT_UP, c.battery_limit);
-                                        let down = if c.battery_limit > 5 { c.battery_limit - 5 } else { c.battery_limit };
-                                        let _ = wmi_ec::wmi_write_ec(wmi_ec::ADDR_BATTERY_LIMIT_DOWN, down);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Heartbeat: ensure APExist is maintained continuously
-                if let Some(val) = wmi_ec::wmi_read_ec(wmi_ec::ADDR_AP_OEM_BYTE) {
-                    if (val & 0x01) == 0 {
-                        let _ = wmi_ec::wmi_write_ec(wmi_ec::ADDR_AP_OEM_BYTE, val | 0x01);
-                    }
-                }
-
-                thread::sleep(Duration::from_millis(2000));
-            }
-        });
+        crate::system::ec_sampler::attach(Arc::clone(&cache));
 
         let hal_supported = crate::hal::get_hardware_driver().is_hardware_supported();
         let is_mock = !wmi_ec::is_acpi_driver_available()

@@ -355,6 +355,21 @@ pub fn set_switch(switch_name: &str, enable: bool) -> Result<bool, String> {
                 if hw_locked != enable {
                     crate::driver::wmi_ec::send_winkey_lock_trigger();
                 }
+                // The EC takes up to ~1 s to act on the trigger and drops one that arrives while it
+                // is still busy with the previous toggle (seen 2026-11-15: on, then off 1.2 s later,
+                // left the EC locked while the software side said unlocked). Check and send it again.
+                std::thread::spawn(move || {
+                    for _ in 0..10 {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        if crate::driver::wmi_ec::is_winkey_locked_hw() == enable {
+                            return;
+                        }
+                    }
+                    if crate::system::hooks::is_win_key_locked() == enable {
+                        crate::log_warn!("DEVICE_SWITCH", "EC Win-key lock did not reach {} after 2 s; sending the trigger again", enable);
+                        crate::driver::wmi_ec::send_winkey_lock_trigger();
+                    }
+                });
             }
 
             cfg.win_key_locked = enable;

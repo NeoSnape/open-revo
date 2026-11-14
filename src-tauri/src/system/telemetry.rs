@@ -10,7 +10,8 @@ use crate::driver::gpu_bridge::SharedGpuBridge;
 use crate::commands::system_cmd::collect_hardware_state;
 
 static ACTIVE_SUBSCRIBERS: AtomicU32 = AtomicU32::new(0);
-static MAIN_WINDOW_VISIBLE: AtomicBool = AtomicBool::new(true);
+/// False until the page reports a window that is really on screen.
+static MAIN_WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false);
 static SCREEN_SUSPENDED: AtomicBool = AtomicBool::new(false);
 
 fn get_subscribed_sensors() -> &'static Mutex<HashMap<String, HashSet<String>>> {
@@ -153,8 +154,17 @@ pub fn start_telemetry_loop(
 }
 
 #[tauri::command]
-pub fn report_window_visibility(visible: bool) -> Result<(), String> {
-    set_main_window_visible(visible);
+pub fn report_window_visibility(app: AppHandle, visible: bool) -> Result<(), String> {
+    // The page reports "visible" as soon as it has loaded, also when the app was started minimised
+    // to the tray. Trusting that kept the 1.5 s telemetry loop (and the GPU queries) running until
+    // the panel had been opened and closed once, doubling the idle CPU use after every boot.
+    let really_visible = visible && {
+        use tauri::Manager;
+        app.get_webview_window("main").map_or(false, |w| {
+            w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false)
+        })
+    };
+    set_main_window_visible(really_visible);
     Ok(())
 }
 

@@ -209,6 +209,19 @@ pub fn decide_power_online_status(is_thin_and_light: bool, ec_pwr: Option<u8>, i
     true
 }
 
+/// Same decision as `is_dc_round_plugged_in`, from the EC sampler's latest power status instead of
+/// a fresh EC read (at most 500 ms old). For periodic consumers; decisions made on a user action
+/// keep using the fresh read.
+pub fn is_dc_round_plugged_in_sampled() -> bool {
+    match crate::system::ec_sampler::latest().power_status {
+        Some(pwr) => {
+            let (_, is_ac, _) = get_live_power_status();
+            decide_power_online_status(is_thin_and_light_or_pure_igpu(), Some(pwr), is_ac)
+        }
+        None => is_dc_round_plugged_in(),
+    }
+}
+
 /// Check whether the laptop is powered by the full-wattage power supply.
 pub fn is_dc_round_plugged_in() -> bool {
     let is_thin_and_light = is_thin_and_light_or_pure_igpu();

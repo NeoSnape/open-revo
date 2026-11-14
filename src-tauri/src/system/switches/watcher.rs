@@ -82,17 +82,14 @@ pub fn start_hardware_state_watcher(
                 continue;
             }
 
-            // Each EC byte read busy-waits on the EC in the driver; at 50 ms (2 reads per tick) this
-            // thread alone cost ~3% of a core while idle. 250 ms is still instant for Win/Fn lock feedback.
-            let loop_delay = std::time::Duration::from_millis(250);
-            std::thread::sleep(loop_delay);
+            // Runs in step with the EC sampler (250 ms) and reads its snapshot; this thread no longer
+            // touches the EC for its periodic checks.
+            let ec = crate::system::ec_sampler::wait_next(std::time::Duration::from_millis(300));
 
             // Fast Track: Watch Win Key Lock & Fn Lock for instantaneous, responsive keyboard hotkey reaction
             // 1. Win Key Lock (Instant OSD feedback & tracking with 180ms debounce to filter contact chatter)
             let current_win = if supports_legacy_ec_switches {
-                crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_STATUS_BYTE)
-                    .map(|val| (val & crate::driver::wmi_ec::STATUS_WINLOCK) != 0)
-                    .unwrap_or_else(crate::system::hooks::is_win_key_locked)
+                ec.win_key_locked().unwrap_or_else(crate::system::hooks::is_win_key_locked)
             } else {
                 crate::system::hooks::is_win_key_locked()
             };
@@ -115,8 +112,7 @@ pub fn start_hardware_state_watcher(
 
             // 2. Fn Lock (Bit 4: 0x10 with 180ms debounce)
             if supports_legacy_ec_switches {
-                if let Some(val) = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_FN_LOCK) {
-                    let current_fn = (val & 0x10) != 0;
+                if let Some(current_fn) = ec.fn_locked() {
                     if last_fn_lock != Some(current_fn) {
                         if last_fn_toggle_time.elapsed() >= std::time::Duration::from_millis(180) {
                             crate::log_info!("DEVICE_SWITCH", "External Fn Lock state change: {:?} -> {}", last_fn_lock, current_fn);
@@ -238,7 +234,7 @@ pub fn start_hardware_state_watcher(
 
             // 7. Watch AC Power Transition for Auto Min Refresh Rate on Battery
             let (_, is_ac, _) = crate::commands::hardware_cmd::get_live_power_status();
-            let is_dc = crate::commands::hardware_cmd::is_dc_round_plugged_in();
+            let is_dc = crate::commands::power_cmd::is_dc_round_plugged_in_sampled();
 
             let is_thin_light = crate::commands::power_cmd::is_thin_and_light_or_pure_igpu();
 
