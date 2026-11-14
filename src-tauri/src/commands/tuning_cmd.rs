@@ -239,7 +239,6 @@ pub fn reset_custom_profile_to_defaults() -> crate::system::config::CustomProfil
 #[tauri::command]
 pub fn apply_custom_profile(
     profile: crate::system::config::CustomProfileConfig,
-    ec_state: State<'_, SharedEcBridge>,
 ) -> Result<(), String> {
     crate::log_info!(
         "CUSTOM_TRACE",
@@ -250,7 +249,7 @@ pub fn apply_custom_profile(
         profile.gpu_db_enabled, profile.gpu_db_watts, profile.gpu_super_perf
     );
 
-    let mut cfg = crate::system::config::load_config();
+    let cfg = crate::system::config::load_config();
     if !is_dc_round_plugged_in() && !cfg.unlock_battery_power_limit {
         crate::log_warn!(
             "CUSTOM_TRACE",
@@ -264,24 +263,8 @@ pub fn apply_custom_profile(
         return Err(msg.to_string());
     }
 
-    let is_dc = is_dc_round_plugged_in();
-    cfg.custom_profile = profile.clone();
-    cfg.power_mode = 4;
-    if is_dc {
-        cfg.power_mode_ac = 4;
-    } else {
-        cfg.power_mode_battery = 4;
-    }
-    crate::system::config::modify_config(|c| {
-        c.custom_profile = cfg.custom_profile.clone();
-        c.power_mode = cfg.power_mode.clone();
-        c.power_mode_ac = cfg.power_mode_ac.clone();
-        c.power_mode_battery = cfg.power_mode_battery.clone();
-    });
-
-    ec_state.lock().set_power_mode(4);
-
-    Ok(())
+    crate::system::config::modify_config(|c| c.custom_profile = profile.clone());
+    crate::system::mode::select(4, crate::system::mode::Origin::Profile)
 }
 
 #[tauri::command]
@@ -387,32 +370,26 @@ pub fn get_active_profile_id() -> Result<String, String> {
 #[tauri::command]
 pub fn set_active_profile_id(
     id: String,
-    ec_state: State<'_, SharedEcBridge>,
 ) -> Result<crate::system::config::CustomProfilePreset, String> {
     let profiles = crate::system::config::list_profiles();
     let target = profiles.into_iter().find(|p| p.id == id)
         .ok_or_else(|| format!("未找到指定的方案 ID: {}", id))?;
 
-    let mut cfg = crate::system::config::load_config();
-    cfg.active_profile_id = id.clone();
-    cfg.custom_profile = target.profile.clone();
     let is_dc = is_dc_round_plugged_in();
-    if is_dc {
-        cfg.power_mode_ac = 4;
-    } else {
-        cfg.power_mode_battery = 4;
-    }
-    if is_dc || cfg.unlock_battery_power_limit {
-        cfg.power_mode = 4;
-        ec_state.lock().set_power_mode(4);
-    }
-    crate::system::config::modify_config(|c| {
-        c.active_profile_id = cfg.active_profile_id.clone();
-        c.custom_profile = cfg.custom_profile.clone();
-        c.power_mode_ac = cfg.power_mode_ac.clone();
-        c.power_mode_battery = cfg.power_mode_battery.clone();
-        c.power_mode = cfg.power_mode.clone();
+    let unlocked = crate::system::config::modify_config(|c| {
+        c.active_profile_id = id.clone();
+        c.custom_profile = target.profile.clone();
+        // Custom is what this power source should come back to, even if it cannot be entered now.
+        if is_dc {
+            c.power_mode_ac = 4;
+        } else {
+            c.power_mode_battery = 4;
+        }
+        c.unlock_battery_power_limit
     });
+    if is_dc || unlocked {
+        crate::system::mode::select(4, crate::system::mode::Origin::Profile)?;
+    }
     Ok(target)
 }
 
@@ -423,15 +400,14 @@ pub fn save_profile_preset(
 ) -> Result<(), String> {
     crate::system::config::save_profile_file(&preset)?;
 
-    let mut cfg = crate::system::config::load_config();
-    if cfg.active_profile_id == preset.id {
-        cfg.custom_profile = preset.profile.clone();
-        cfg.power_mode = 4;
-        crate::system::config::modify_config(|c| {
-            c.custom_profile = cfg.custom_profile.clone();
-            c.power_mode = cfg.power_mode.clone();
-        });
-    }
+    // The panel auto-saves on every edit. This used to also write power_mode = 4 into the config
+    // without switching the hardware, so editing a profile while in another mode left the saved
+    // mode and the real one disagreeing. Saving a profile never changes the mode now.
+    crate::system::config::modify_config(|c| {
+        if c.active_profile_id == preset.id {
+            c.custom_profile = preset.profile.clone();
+        }
+    });
     crate::system::power_mode::sync_oem_mode4_profile(&preset.profile);
     Ok(())
 }

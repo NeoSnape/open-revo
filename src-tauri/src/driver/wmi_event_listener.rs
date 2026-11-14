@@ -82,7 +82,7 @@ fn dispatch_acpi_event(
                 *last_switch_time = Instant::now();
                 let current_mode = ec_bridge.lock().get_power_mode();
                 let is_dc = crate::commands::hardware_cmd::is_dc_round_plugged_in();
-                let mut cfg = crate::system::config::load_config();
+                let cfg = crate::system::config::load_config();
                 let next_mode = if is_dc || cfg.unlock_battery_power_limit {
                     // Explicit 4-stage mode cycle: 1 (Office) -> 2 (Balance) -> 3 (Beast) -> 4 (Custom) -> 1 (Office)
                     match current_mode {
@@ -109,28 +109,7 @@ fn dispatch_acpi_event(
                     is_dc,
                     cfg.unlock_battery_power_limit
                 );
-                ec_bridge.lock().set_power_mode(next_mode);
-
-                // Update persistent config
-                cfg.power_mode = next_mode;
-                if is_dc {
-                    cfg.power_mode_ac = next_mode;
-                } else {
-                    cfg.power_mode_battery = next_mode;
-                }
-                crate::system::config::modify_config(|c| {
-                    c.power_mode = cfg.power_mode.clone();
-                    c.power_mode_ac = cfg.power_mode_ac.clone();
-                    c.power_mode_battery = cfg.power_mode_battery.clone();
-                });
-
-                crate::update_tray_power_mode(next_mode);
-
-                // Broadcast to UI so frontend badges, charts, and colors update immediately
-                crate::system::osd_window::wake_osd_if_enabled(app_handle);
-                let _ = app_handle.emit("physical-mode-switched", next_mode);
-                let _ = app_handle.emit_to("main", "physical-mode-switched", next_mode);
-                let _ = app_handle.emit_to("osd", "physical-mode-switched", next_mode);
+                let _ = crate::system::mode::select(next_mode, crate::system::mode::Origin::QKey);
             } else {
                 crate::log_debug!("WMI_LISTENER", "Q-Key debounced (elapsed < 500ms)");
             }

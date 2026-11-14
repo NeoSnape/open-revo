@@ -72,29 +72,14 @@ pub fn run_session_end_shutdown() {
     });
 }
 
-static PREV_POWER_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-
 fn handle_sleep_auto_office() {
-    let cfg = crate::system::config::load_config();
-    if cfg.sleep_auto_office {
-        let cur_mode = cfg.power_mode;
-        if cur_mode != 1 {
-            crate::log_info!("POWER_EVENT", "Auto-switching from mode {} to Office Mode (1) before sleep / lid close!", cur_mode);
-            PREV_POWER_MODE.store(cur_mode, Ordering::SeqCst);
-            crate::system::power_mode::apply_full_power_mode(1);
-        }
+    if crate::system::config::load_config().sleep_auto_office {
+        crate::system::mode::begin_override(crate::system::mode::Override::Sleep, 1);
     }
 }
 
 fn handle_wake_auto_office() {
-    let cfg = crate::system::config::load_config();
-    if cfg.sleep_auto_office {
-        let prev = PREV_POWER_MODE.swap(0, Ordering::SeqCst);
-        if prev > 1 && prev <= 4 {
-            crate::log_info!("POWER_EVENT", "Waking up! Restoring previous power mode: {}", prev);
-            crate::system::power_mode::apply_full_power_mode(prev);
-        }
-    }
+    crate::system::mode::end_override(crate::system::mode::Override::Sleep);
 }
 
 fn handle_system_resume_pipeline(event_name: &str) {

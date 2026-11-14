@@ -202,7 +202,6 @@ pub fn save_app_config(cfg: crate::system::config::AppConfig) -> Result<(), Stri
 pub fn set_unlock_battery_power_limit(
     enable: bool,
     app: AppHandle,
-    ec_state: State<'_, SharedEcBridge>,
 ) -> Result<bool, String> {
     let cfg = crate::system::config::modify_config(|c| {
         c.unlock_battery_power_limit = enable;
@@ -220,12 +219,7 @@ pub fn set_unlock_battery_power_limit(
             cfg.power_mode,
             target_mode
         );
-        crate::system::config::modify_config(|c| c.power_mode = target_mode);
-        ec_state.lock().set_power_mode(target_mode);
-        crate::update_tray_power_mode(target_mode);
-        let _ = app.emit("physical-mode-switched", target_mode);
-        let _ = app.emit_to("main", "physical-mode-switched", target_mode);
-        let _ = app.emit_to("osd", "physical-mode-switched", target_mode);
+        let _ = crate::system::mode::select(target_mode, crate::system::mode::Origin::BatteryGuard);
     }
 
     let _ = app.emit("unlock-battery-power-limit-changed", enable);
@@ -300,11 +294,8 @@ pub fn toggle_oem_service(
             } else {
                 2
             };
-            {
-                let ec = ec_clone.lock();
-                ec.set_power_mode(effective_mode);
-                ec.set_battery_limit(cfg_clone.battery_limit);
-            }
+            let _ = crate::system::mode::select(effective_mode, crate::system::mode::Origin::Startup);
+            ec_clone.lock().set_battery_limit(cfg_clone.battery_limit);
             if let Some(v) = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_AC_RECOVERY) {
                 let mut new_v = if cfg_clone.ac_recovery_enabled { v | crate::driver::wmi_ec::AC_RECOVERY_BITMASK } else { v & !crate::driver::wmi_ec::AC_RECOVERY_BITMASK };
                 if effective_mode == 4 {

@@ -283,13 +283,6 @@ fn any_key_down() -> bool {
     (0x08..=0xFEi32).any(|vk| unsafe { (GetAsyncKeyState(vk) as u16 & 0x8000) != 0 })
 }
 
-fn apply_mode_now(mode: u8) {
-    if let Some(ec) = crate::system::power_listener::global_ec() {
-        ec.lock().set_power_mode_cache(mode);
-    }
-    crate::system::power_mode::apply_full_power_mode(mode);
-}
-
 fn do_blank() {
     if CURRENT.with(|c| c.borrow().is_some()) {
         return;
@@ -360,12 +353,9 @@ fn do_blank() {
                 Err(e) => crate::log_warn!("SCREEN", "Could not switch to {} Hz while blanked: {}", BLANK_HZ, e),
             }
         }
-        if let Some(ec) = crate::system::power_listener::global_ec() {
-            let mode = ec.lock().get_power_mode();
-            if mode != BLANK_MODE {
-                b.saved_mode = Some(mode);
-                apply_mode_now(BLANK_MODE);
-            }
+        let mode_before = crate::system::mode::effective();
+        if crate::system::mode::begin_override(crate::system::mode::Override::ScreenBlank, BLANK_MODE) {
+            b.saved_mode = Some(mode_before);
         }
         crate::log_info!(
             "SCREEN",
@@ -401,20 +391,10 @@ fn do_unblank(reason: &str) {
     }
     crate::system::switches::set_screen_off(false);
 
-    // Power mode last; only if nobody changed it meanwhile, and never Beast/Custom on battery
-    // (same guard as the set_power_mode command).
-    if let (Some(mode), Some(ec)) = (b.saved_mode, crate::system::power_listener::global_ec()) {
-        let current = ec.lock().get_power_mode();
-        let cfg = crate::system::config::load_config();
-        let on_dc = crate::commands::power_cmd::is_dc_round_plugged_in();
-        let thin = crate::commands::power_cmd::is_thin_and_light_or_pure_igpu();
-        if current != BLANK_MODE {
-            crate::log_info!("SCREEN", "Power mode was changed to {} while blanked; keeping it", current);
-        } else if !thin && (mode == 3 || mode == 4) && !on_dc && !cfg.unlock_battery_power_limit {
-            crate::log_info!("SCREEN", "Not restoring mode {} on battery; staying in Office", mode);
-        } else {
-            apply_mode_now(mode);
-        }
+    // Power mode last. The mode centre goes back to the selected mode unless it was changed
+    // meanwhile, and never to Beast/Custom on battery.
+    if b.saved_mode.is_some() {
+        crate::system::mode::end_override(crate::system::mode::Override::ScreenBlank);
     }
     if brightness_ok {
         let _ = std::fs::remove_file(marker_path());

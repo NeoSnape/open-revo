@@ -222,39 +222,8 @@ pub fn is_dc_round_plugged_in() -> bool {
 }
 
 #[tauri::command]
-pub fn set_power_mode(mode: u8, app: AppHandle, ec_state: State<'_, SharedEcBridge>) -> Result<(), String> {
-    let is_thin_and_light = is_thin_and_light_or_pure_igpu();
-    let is_dc = is_dc_round_plugged_in();
-    let mut cfg = crate::system::config::load_config();
-    // Gaming laptops must not run Beast (3) or Custom (4) on battery/Type-C to avoid PD overcurrent trips.
-    // Thin & light laptops rely on onboard EC power envelopes (e.g. 28W/30W/35W) and are fully exempt.
-    if !is_thin_and_light && (mode == 3 || mode == 4) && !is_dc && !cfg.unlock_battery_power_limit {
-        let msg = if check_dgpu_present() {
-            "在电池或 Type-C 供电下，狂暴模式与自定义模式不可用。请连接 DC 圆口电源适配器，或在【系统】设置中开启“解除离电限制”。"
-        } else {
-            "在电池供电下，狂暴模式与自定义模式不可用。请连接电源适配器，或在【系统】设置中开启“解除离电限制”。"
-        };
-        return Err(msg.to_string());
-    }
-    // Applies MODE_INDEX, TRIGGER_BYTE, PL targets and the fan table (apply_full_power_mode).
-    ec_state.lock().set_power_mode(mode);
-    cfg.power_mode = mode;
-    if is_dc {
-        cfg.power_mode_ac = mode;
-    } else {
-        cfg.power_mode_battery = mode;
-    }
-    crate::system::config::modify_config(|c| {
-        c.power_mode = cfg.power_mode.clone();
-        c.power_mode_ac = cfg.power_mode_ac.clone();
-        c.power_mode_battery = cfg.power_mode_battery.clone();
-    });
-    crate::update_tray_power_mode(mode);
-    crate::system::osd_window::wake_osd_if_enabled(&app);
-    let _ = app.emit("physical-mode-switched", mode);
-    let _ = app.emit_to("main", "physical-mode-switched", mode);
-    let _ = app.emit_to("osd", "physical-mode-switched", mode);
-    Ok(())
+pub fn set_power_mode(mode: u8) -> Result<(), String> {
+    crate::system::mode::select(mode, crate::system::mode::Origin::Panel)
 }
 
 #[tauri::command]

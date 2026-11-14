@@ -28,4 +28,5 @@ pub mod rtss_osd;
 pub mod rtss_frametime;
 pub mod webview_health;
 pub mod cli_server;
+pub mod mode;
 pub mod screen_blank;

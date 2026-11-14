@@ -2,7 +2,6 @@
 // Executes hardware control, system automation, and cross-plugin events triggered by global shortcuts.
 
 use tauri::{AppHandle, Emitter};
-use crate::hal::traits::HardwarePowerMode;
 use super::types::{ShortcutAction, ShortcutBinding};
 
 #[cfg(target_os = "windows")]
@@ -35,56 +34,22 @@ pub fn dispatch_action(app: AppHandle, binding: ShortcutBinding) {
 
             // 2. Cycle Power Mode (1-Office -> 2-Balance -> 3-Turbo -> 1-Office)
             ShortcutAction::CyclePowerMode => {
-                let hal = crate::hal::get_hardware_driver();
-                let mut cfg = crate::system::config::load_config();
-                let current_mode = cfg.power_mode;
-                let next_mode = match current_mode {
+                use crate::system::mode::{self, Origin};
+                let _ = osd;
+                let next_mode = match mode::selected() {
                     1 => 2,
                     2 => 3,
-                    3 => 1,
                     _ => 1,
                 };
-                let hw_mode = match next_mode {
-                    1 => HardwarePowerMode::Office,
-                    2 => HardwarePowerMode::Balance,
-                    3 => HardwarePowerMode::Turbo,
-                    _ => HardwarePowerMode::Balance,
-                };
-                if hal.set_performance_mode(hw_mode).is_ok() {
-                    cfg.power_mode = next_mode;
-                    crate::system::config::modify_config(|c| c.power_mode = cfg.power_mode.clone());
-                    crate::update_tray_power_mode(next_mode);
-                    crate::log_info!("SHORTCUTS", "Cycled Power Mode: {} -> {}", current_mode, next_mode);
-                    if osd {
-                        crate::system::osd_window::wake_osd_if_enabled(&app);
-                    }
-                    let _ = app.emit("physical-mode-switched", next_mode);
-                    let _ = app.emit_to("osd", "physical-mode-switched", next_mode);
-                    let _ = app.emit_to("main", "physical-mode-switched", next_mode);
+                // Beast is refused on battery: wrap around to Office instead.
+                if mode::select(next_mode, Origin::Shortcut).is_err() {
+                    let _ = mode::select(1, Origin::Shortcut);
                 }
             }
 
             // 2.1 Set Power Mode directly
             ShortcutAction::SetPowerMode(target_mode) => {
-                let hal = crate::hal::get_hardware_driver();
-                let hw_mode = match target_mode {
-                    1 => HardwarePowerMode::Office,
-                    2 => HardwarePowerMode::Balance,
-                    3 => HardwarePowerMode::Turbo,
-                    4 => HardwarePowerMode::Custom,
-                    _ => HardwarePowerMode::Balance,
-                };
-                if hal.set_performance_mode(hw_mode).is_ok() {
-                    crate::system::config::modify_config(|c| c.power_mode = target_mode);
-                    crate::update_tray_power_mode(target_mode);
-                    crate::log_info!("SHORTCUTS", "Set Power Mode: {}", target_mode);
-                    if osd {
-                        crate::system::osd_window::wake_osd_if_enabled(&app);
-                    }
-                    let _ = app.emit("physical-mode-switched", target_mode);
-                    let _ = app.emit_to("osd", "physical-mode-switched", target_mode);
-                    let _ = app.emit_to("main", "physical-mode-switched", target_mode);
-                }
+                let _ = crate::system::mode::select(target_mode, crate::system::mode::Origin::Shortcut);
             }
 
             // 3. Toggle Refresh Rate (e.g. 60Hz <-> High Hz)

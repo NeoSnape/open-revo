@@ -261,38 +261,31 @@ impl EcBridge {
         self.cache.lock().power_mode
     }
 
+    /// Called by `system::mode` only. Records the mode and applies it on a worker thread.
     pub fn set_power_mode(&self, ui_mode: u8) {
-        crate::log_info!("EC_BRIDGE", "User triggered set_power_mode: {}", ui_mode);
+        crate::log_info!("EC_BRIDGE", "set_power_mode: {}", ui_mode);
         {
             let mut c = self.cache.lock();
             c.power_mode = ui_mode;
             c.power_mode_cooldown_until = Instant::now() + Duration::from_secs(5);
         }
 
+        // Apply whatever is the newest request when the worker gets to run: two quick requests
+        // start two workers in no guaranteed order, and the older one must not win.
+        let cache = Arc::clone(&self.cache);
         thread::spawn(move || {
-            crate::system::power_mode::apply_full_power_mode(ui_mode);
+            let newest = cache.lock().power_mode;
+            crate::system::power_mode::apply_full_power_mode(newest);
         });
     }
 
-    /// Update only the cached mode (the caller applies the hardware mode itself, synchronously).
+    /// Called by `system::mode` only: update the cached mode (the hardware mode is applied by the caller).
     pub fn set_power_mode_cache(&self, ui_mode: u8) {
         let mut c = self.cache.lock();
         c.power_mode = ui_mode;
         c.power_mode_cooldown_until = Instant::now() + Duration::from_secs(5);
     }
 
-    pub fn set_power_mode_from_hardware(&self, detected_mode: u8) {
-        crate::log_info!("EC_BRIDGE", "Hardware aligned set_power_mode: {}", detected_mode);
-        {
-            let mut c = self.cache.lock();
-            c.power_mode = detected_mode;
-            c.power_mode_cooldown_until = Instant::now() + Duration::from_secs(3);
-        }
-
-        thread::spawn(move || {
-            crate::system::power_mode::apply_windows_power_overlay(detected_mode);
-        });
-    }
 
     pub fn is_fan_boost(&self) -> bool {
         self.cache.lock().fan_boost

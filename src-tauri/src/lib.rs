@@ -85,6 +85,7 @@ pub fn run() {
 
     let ec_for_manage = Arc::clone(&ec_instance);
     let ec_for_tray = Arc::clone(&ec_instance);
+    let ec_for_mode = Arc::clone(&ec_instance);
     let ec_for_restore = Arc::clone(&ec_instance);
     let ec_for_wmi = Arc::clone(&ec_instance);
     let ec_for_watcher = Arc::clone(&ec_instance);
@@ -275,6 +276,7 @@ pub fn run() {
             crate::system::boot_trace::boot_log("SETUP", "Tauri setup closure entered");
             // First thing: a previous run that died while the screen was blanked left the backlight at 0.
             crate::system::screen_blank::recover_after_crash();
+            crate::system::mode::init(app.handle().clone(), Arc::clone(&ec_for_mode));
             crate::system::actuator::UnifiedPowerActuator::global().bind_app_handle(app.handle().clone());
             crate::system::webview_orchestrator::WebviewOrchestrator::global().bind_app_handle(app.handle().clone());
 

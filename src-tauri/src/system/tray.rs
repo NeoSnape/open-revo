@@ -174,98 +174,16 @@ pub fn handle_tray_menu_event(
             let _ = crate::system::switches::turn_off_screen();
         }
         "mode_office" => {
-            ec_clone.lock().set_power_mode(1);
-            let mut cfg = crate::system::config::load_config();
-            let is_dc = crate::commands::hardware_cmd::is_dc_round_plugged_in();
-            cfg.power_mode = 1;
-            if is_dc {
-                cfg.power_mode_ac = 1;
-            } else {
-                cfg.power_mode_battery = 1;
-            }
-            crate::system::config::modify_config(|c| {
-                c.power_mode = cfg.power_mode.clone();
-                c.power_mode_ac = cfg.power_mode_ac.clone();
-                c.power_mode_battery = cfg.power_mode_battery.clone();
-            });
-            update_tray_power_mode(1);
-            crate::system::osd_window::wake_osd_if_enabled(&app_handle);
-            let _ = app_handle.emit("physical-mode-switched", 1);
-            let _ = app_handle.emit_to("main", "physical-mode-switched", 1);
-            let _ = app_handle.emit_to("osd", "physical-mode-switched", 1);
+            let _ = crate::system::mode::select(1, crate::system::mode::Origin::Tray);
         }
         "mode_balance" => {
-            ec_clone.lock().set_power_mode(2);
-            let mut cfg = crate::system::config::load_config();
-            let is_dc = crate::commands::hardware_cmd::is_dc_round_plugged_in();
-            cfg.power_mode = 2;
-            if is_dc {
-                cfg.power_mode_ac = 2;
-            } else {
-                cfg.power_mode_battery = 2;
-            }
-            crate::system::config::modify_config(|c| {
-                c.power_mode = cfg.power_mode.clone();
-                c.power_mode_ac = cfg.power_mode_ac.clone();
-                c.power_mode_battery = cfg.power_mode_battery.clone();
-            });
-            update_tray_power_mode(2);
-            crate::system::osd_window::wake_osd_if_enabled(&app_handle);
-            let _ = app_handle.emit("physical-mode-switched", 2);
-            let _ = app_handle.emit_to("main", "physical-mode-switched", 2);
-            let _ = app_handle.emit_to("osd", "physical-mode-switched", 2);
+            let _ = crate::system::mode::select(2, crate::system::mode::Origin::Tray);
         }
         "mode_beast" => {
-            let is_dc = crate::commands::hardware_cmd::is_dc_round_plugged_in();
-            let mut cfg = crate::system::config::load_config();
-            if !is_dc && !cfg.unlock_battery_power_limit {
-                crate::log_warn!("TRAY", "Blocked Turbo mode from tray: AC/DC power is not connected!");
-                update_tray_power_mode(ec_clone.lock().get_power_mode());
-            } else {
-                ec_clone.lock().set_power_mode(3);
-                cfg.power_mode = 3;
-                if is_dc {
-                    cfg.power_mode_ac = 3;
-                } else {
-                    cfg.power_mode_battery = 3;
-                }
-                crate::system::config::modify_config(|c| {
-                    c.power_mode = cfg.power_mode.clone();
-                    c.power_mode_ac = cfg.power_mode_ac.clone();
-                    c.power_mode_battery = cfg.power_mode_battery.clone();
-                });
-                update_tray_power_mode(3);
-                crate::system::osd_window::wake_osd_if_enabled(&app_handle);
-                let _ = app_handle.emit("physical-mode-switched", 3);
-                let _ = app_handle.emit_to("main", "physical-mode-switched", 3);
-                let _ = app_handle.emit_to("osd", "physical-mode-switched", 3);
-            }
+            let _ = crate::system::mode::select(3, crate::system::mode::Origin::Tray);
         }
         "mode_custom" => {
-            let is_dc = crate::commands::hardware_cmd::is_dc_round_plugged_in();
-            let mut cfg = crate::system::config::load_config();
-            if !is_dc && !cfg.unlock_battery_power_limit {
-                crate::log_warn!("TRAY", "Blocked Custom mode from tray: AC/DC power is not connected!");
-                update_tray_power_mode(ec_clone.lock().get_power_mode());
-            } else {
-                ec_clone.lock().set_power_mode(4);
-                cfg.power_mode = 4;
-                if is_dc {
-                    cfg.power_mode_ac = 4;
-                } else {
-                    cfg.power_mode_battery = 4;
-                }
-                crate::system::config::modify_config(|c| {
-                    c.power_mode = cfg.power_mode.clone();
-                    c.power_mode_ac = cfg.power_mode_ac.clone();
-                    c.power_mode_battery = cfg.power_mode_battery.clone();
-                });
-                update_tray_power_mode(4);
-                crate::system::osd_window::wake_osd_if_enabled(&app_handle);
-                let _ = app_handle.emit("physical-mode-switched", 4);
-                let _ = app_handle.emit_to("main", "physical-mode-switched", 4);
-                let _ = app_handle.emit_to("osd", "physical-mode-switched", 4);
-            }
+            let _ = crate::system::mode::select(4, crate::system::mode::Origin::Tray);
         }
         "toggle_fan" => {
             let ec = ec_clone.lock();

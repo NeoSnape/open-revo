@@ -1,11 +1,9 @@
-pub mod arbiter;
 pub mod ec_mode;
 pub mod fan_table;
 pub mod oem_sync;
 pub mod ppm;
 pub mod presets;
 
-pub use arbiter::{PowerArbiter, PowerIntentSource};
 pub use ec_mode::apply_ec_hardware_mode;
 pub use fan_table::{
     apply_fan_table_to_ec, apply_mode_fan_table, build_custom_fan_table, get_mode_fan_table,
@@ -244,9 +242,6 @@ pub fn spawn_hardware_state_restore(ec_for_restore: crate::driver::ec_bridge::Sh
             };
             if cfg.power_mode != target_mode {
                 crate::log_info!("MAIN", "Machine booted on DC power: aligning power mode to AC preference {} (was {})", target_mode, cfg.power_mode);
-                let mut updated_cfg = cfg.clone();
-                updated_cfg.power_mode = target_mode;
-                crate::system::config::modify_config(|c| c.power_mode = updated_cfg.power_mode.clone());
             }
             target_mode
         } else {
@@ -258,34 +253,19 @@ pub fn spawn_hardware_state_restore(ec_for_restore: crate::driver::ec_bridge::Sh
             } else {
                 let target_mode = if cfg.power_mode_battery == 1 { 1 } else { 2 };
                 crate::log_info!("MAIN", "Machine booted on battery: setting power mode to battery preference {} (AC preference is {})", target_mode, cfg.power_mode_ac);
-                if cfg.power_mode != target_mode {
-                    let mut updated_cfg = cfg.clone();
-                    if updated_cfg.power_mode == 3 || updated_cfg.power_mode == 4 {
-                        updated_cfg.power_mode_ac = updated_cfg.power_mode;
-                    }
-                    updated_cfg.power_mode = target_mode;
-                    crate::system::config::modify_config(|c| {
-                        c.power_mode_ac = updated_cfg.power_mode_ac.clone();
-                        c.power_mode = updated_cfg.power_mode.clone();
-                    });
+                // Keep a high mode as the thing to come back to once the charger is connected.
+                if cfg.power_mode == 3 || cfg.power_mode == 4 {
+                    let high = cfg.power_mode;
+                    crate::system::config::modify_config(|c| c.power_mode_ac = high);
                 }
                 target_mode
             }
         };
 
-        crate::system::tray::update_tray_power_mode(effective_power_mode);
+        // Persists the mode, applies it and ticks the tray.
+        let _ = crate::system::mode::select(effective_power_mode, crate::system::mode::Origin::Startup);
         if is_thin_light {
             let hal = crate::hal::get_hardware_driver();
-            let hw_mode = match effective_power_mode {
-                1 => crate::hal::HardwarePowerMode::Office,
-                2 => crate::hal::HardwarePowerMode::Balance,
-                3 => crate::hal::HardwarePowerMode::Turbo,
-                4 => crate::hal::HardwarePowerMode::Custom,
-                _ => crate::hal::HardwarePowerMode::Balance,
-            };
-            let _ = hal.set_performance_mode(hw_mode);
-            ec_for_restore.lock().set_power_mode_from_hardware(effective_power_mode);
-            crate::log_info!("POWER_RESTORE", "Thin & light startup power mode applied via HAL: {:?}", hw_mode);
 
             // Restore battery health limit via HAL if applicable
             let batt_mode = match cfg.battery_limit {
@@ -304,7 +284,6 @@ pub fn spawn_hardware_state_restore(ec_for_restore: crate::driver::ec_bridge::Sh
 
         {
             let ec = ec_for_restore.lock();
-            ec.set_power_mode(effective_power_mode);
 
             // Legacy residual cleanup: earlier builds wrote 0x0770=4 or 0x0770=5 (ADDR_BATTERY_PLATFORM_OVERRIDE)
             // which breaks Fn keys on gaming laptops. The new Platform4-Gate method no longer uses this register.

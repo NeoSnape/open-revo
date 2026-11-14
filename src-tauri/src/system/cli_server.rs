@@ -188,9 +188,9 @@ fn dispatch(app: &AppHandle, cmd: &str, args: &Value, client_elevated: bool) -> 
                     .or_else(|| profiles.iter().find(|x| x.name == p))
                     .or_else(|| profiles.iter().find(|x| x.name.to_lowercase().contains(&p.to_lowercase())))
                     .ok_or_else(|| format!("no custom profile matches '{}' (see `orv profile list`)", p))?;
-                tuning_cmd::set_active_profile_id(target.id.clone(), ec())?;
+                tuning_cmd::set_active_profile_id(target.id.clone())?;
             }
-            power_cmd::set_power_mode(mode, app.clone(), ec())?;
+            power_cmd::set_power_mode(mode)?;
             changed(json!({ "mode": mode_name(mode) }))
         }
         "boost" => {
