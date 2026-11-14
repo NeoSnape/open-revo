@@ -893,10 +893,6 @@ impl TruthReconstructor {
 /// 2. Live Hardware Truth Telemetry (VBIOS power limits, EC registers)
 /// NEVER infers hardware parameters from motherboard, CPU, or GPU model names!
 pub fn synthesize_hardware_profile(cpu_name: &str, gpu_name: &str) -> ModelProfile {
-    // Principle 1: Declarative Driver Center First
-    let manifest = crate::hal::declarative::load_matched_manifest();
-    let manifest_pmw = manifest.as_ref().and_then(|m| m.capabilities.power_mode_watts.clone());
-
     // Principle 2: Truth Telemetry for GPU
     // Directly query the authoritative hardware truth source: probe_gpu_tuning_capabilities
     let gpu_caps = crate::driver::gpu_bridge::probe_gpu_tuning_capabilities();
@@ -908,12 +904,7 @@ pub fn synthesize_hardware_profile(cpu_name: &str, gpu_name: &str) -> ModelProfi
     // 2. Physical EC registers (ADDR_BALANCE_PL1 / ADDR_OFFICE_PL1 / ADDR_TURBO_PL1)
     // 3. Fallback safe standard mobile baseline (45, 65, 95)
     // NEVER infer based on whether CPU name contains "HX", "H", "U", etc.!
-    let (office_pl1, bal_pl1, tur_pl1) = if let Some(ref pmw) = manifest_pmw {
-        let off = pmw.get("office").copied().unwrap_or(45) as u16;
-        let bal = pmw.get("balance").copied().unwrap_or(65) as u16;
-        let tur = pmw.get("turbo").copied().unwrap_or(95) as u16;
-        (off, bal, tur)
-    } else {
+    let (office_pl1, bal_pl1, tur_pl1) = {
         let off_ec = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_OFFICE_PL1).unwrap_or(0) as u16;
         let bal_ec = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_BALANCE_PL1).unwrap_or(0) as u16;
         let tur_ec = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_TURBO_PL1).unwrap_or(0) as u16;
@@ -1186,9 +1177,8 @@ pub fn generate_model_fan_curve(_temp_levels: u8) -> Vec<crate::system::config::
 
 /// Build a fully populated CustomProfileConfig adapted to a specific ModelProfile
 pub fn build_model_default_custom_profile(profile: &ModelProfile) -> crate::system::config::CustomProfileConfig {
-    let manifest = crate::hal::declarative::load_matched_manifest();
-    let ramp_rate = manifest.as_ref().map(|m| m.capabilities.fan_ramp_rate).unwrap_or(true);
-    let isolated = manifest.as_ref().map(|m| m.capabilities.fan_independent_channels).unwrap_or(profile.fan_control_respective);
+    let ramp_rate = true;
+    let isolated = profile.fan_control_respective;
     let super_perf = true;
 
     crate::system::config::CustomProfileConfig {

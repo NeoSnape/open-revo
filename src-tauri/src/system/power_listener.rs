@@ -65,12 +65,10 @@ pub fn run_session_end_shutdown() {
         crate::log_info!("POWER_EVENT", "System is shutting down or restarting: resetting display tuning, stopping lighting.");
         crate::system::telemetry::set_screen_suspended(true);
         crate::system::display_tuning::reset_display_tuning_to_default();
-        if !crate::hal::platform_probe::is_ultrabook() {
-            crate::driver::ite_streamer::get_global_streamer().suspend_for_sleep();
-            let lighting = crate::driver::ite_lighting::get_global_lighting();
-            lighting.turn_off_all();
-            lighting.invalidate_devices();
-        }
+        crate::driver::ite_streamer::get_global_streamer().suspend_for_sleep();
+        let lighting = crate::driver::ite_lighting::get_global_lighting();
+        lighting.turn_off_all();
+        lighting.invalidate_devices();
     });
 }
 
@@ -101,17 +99,7 @@ fn handle_wake_auto_office() {
 
 fn handle_system_resume_pipeline(event_name: &str) {
     crate::system::telemetry::set_screen_suspended(false);
-    if crate::hal::platform_probe::is_ultrabook() {
-        crate::log_info!("POWER_EVENT", "Ultrabook {}! Restoring power mode only.", event_name);
-        handle_wake_auto_office();
-        std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            crate::system::display_tuning::init_display_tuning();
-        });
-        return;
-    }
-
-    crate::log_info!("POWER_EVENT", "Laptop {}! Restoring power mode, cooler & lighting...", event_name);
+    crate::log_info!("POWER_EVENT", "Laptop {}! Restoring power mode & lighting...", event_name);
     handle_wake_auto_office();
 
     std::thread::spawn(|| {
@@ -148,8 +136,7 @@ fn handle_system_resume_pipeline(event_name: &str) {
         0x10,
         cfg.fn_lock_enabled,
     );
-    let is_ultrabook = crate::hal::platform_probe::is_ultrabook();
-    let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family() && !is_ultrabook;
+    let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family();
     if supports_legacy_ec {
         let hw_locked = crate::driver::wmi_ec::is_winkey_locked_hw();
         if hw_locked != cfg.win_key_locked {
@@ -200,12 +187,8 @@ unsafe extern "system" fn power_wnd_proc(
                 }
                 if is_running_tasks {
                     crate::log_info!("POWER_EVENT", "Standby event received but Keep-Awake or Screen-Off is ACTIVE. Preserving active power mode and water cooling for background tasks.");
-                } else if crate::hal::platform_probe::is_ultrabook() {
-                    crate::log_info!("POWER_EVENT", "Ultrabook entering Standby: skipping water cooler & lighting suspension.");
-                    crate::system::telemetry::set_screen_suspended(true);
-                    handle_sleep_auto_office();
                 } else {
-                    crate::log_info!("POWER_EVENT", "System is entering Sleep / Hibernate / Standby! Stopping water cooler & suspending lighting...");
+                    crate::log_info!("POWER_EVENT", "System is entering Sleep / Hibernate / Standby! Suspending lighting...");
                     crate::system::telemetry::set_screen_suspended(true);
                     handle_sleep_auto_office();
                     let streamer = crate::driver::ite_streamer::get_global_streamer();
@@ -231,19 +214,14 @@ unsafe extern "system" fn power_wnd_proc(
                             // 0 = Lid Closed, 1 = Lid Open
                             if lid_state == 0 {
                                 crate::system::telemetry::set_screen_suspended(true);
-                                if crate::hal::platform_probe::is_ultrabook() {
-                                    crate::log_info!("POWER_EVENT", "Ultrabook lid closed! Adjusting power mode only.");
-                                    handle_sleep_auto_office();
-                                } else {
-                                    crate::log_info!("POWER_EVENT", "Laptop lid closed! Switching to office & stopping water cooler...");
-                                    handle_sleep_auto_office();
-                                    let streamer = crate::driver::ite_streamer::get_global_streamer();
-                                    streamer.suspend_for_sleep();
-                                    let lighting = crate::driver::ite_lighting::get_global_lighting();
-                                    lighting.turn_off_all();
-                                    lighting.invalidate_devices();
-                                    lighting.is_sleeping.store(true, Ordering::SeqCst);
-                                }
+                                crate::log_info!("POWER_EVENT", "Laptop lid closed! Suspending lighting...");
+                                handle_sleep_auto_office();
+                                let streamer = crate::driver::ite_streamer::get_global_streamer();
+                                streamer.suspend_for_sleep();
+                                let lighting = crate::driver::ite_lighting::get_global_lighting();
+                                lighting.turn_off_all();
+                                lighting.invalidate_devices();
+                                lighting.is_sleeping.store(true, Ordering::SeqCst);
                             } else {
                                 handle_system_resume_pipeline("lid opened");
                             }

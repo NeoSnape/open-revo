@@ -369,8 +369,7 @@ pub fn spawn_hardware_state_restore(ec_for_restore: crate::driver::ec_bridge::Sh
         );
 
         // Restore Win Key Lock state (Software Hook + EC TRIGGER_WINLOCK)
-        let is_ultrabook = crate::hal::platform_probe::is_ultrabook();
-        let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family() && !is_ultrabook;
+        let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family();
         if supports_legacy_ec {
             let hw_locked = crate::driver::wmi_ec::is_winkey_locked_hw();
             if hw_locked != cfg.win_key_locked {

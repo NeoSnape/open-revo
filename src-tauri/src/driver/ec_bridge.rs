@@ -89,13 +89,6 @@ impl EcBridge {
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(500));
 
-            // On non-Tongfang Ultrabooks, background polling is completely disabled!
-            // Fan RPM is only fetched on-demand by Telemetry when the window is in the foreground.
-            if crate::hal::platform_probe::is_ultrabook() && !crate::hal::platform_probe::is_tongfang_family() {
-                crate::log_info!("EC_BRIDGE", "Non-Tongfang Ultrabook detected: background EC/WMI fan poller permanently bypassed.");
-                return;
-            }
-
             let register_list = [
                 wmi_ec::ADDR_SUPER_PERFORMANCE,       // Fan Boost Hardware Clamp (Bit 6: 0x40)
                 wmi_ec::ADDR_MODE_INDEX,              // Operating Mode (1: Office, 0: Balance, 2: Turbo)
@@ -147,26 +140,7 @@ impl EcBridge {
 
                         // 1. Fan Boost Hardware Clamp - Direct zero-latency hardware clamp state
                         if now >= c.fan_boost_cooldown_until {
-                            let is_ultrabook = crate::hal::platform_probe::is_ultrabook();
-                            if !is_ultrabook {
-                                let is_bld_manifest = crate::hal::declarative::load_matched_manifest()
-                                    .map(|m| m.channels.values().any(|ch| matches!(ch, crate::hal::declarative::model_manifest::ChannelDef::WmiMailbox { .. })))
-                                    .unwrap_or(false);
-                                if !is_bld_manifest {
-                                    let hw_fb = (raw_fan_clamp & wmi_ec::FAN_BOOST_CLAMP_BIT) != 0;
-                                    c.fan_boost = hw_fb;
-                                }
-                            } else {
-                                // Ultrabooks do not possess autonomous physical Fn+1 hotkeys or hardware toggle rockers.
-                                // Fan Boost on ultrabooks is managed authoritatively by OpenRevo software.
-                                // We must NEVER let periodic background polling blindly overwrite c.fan_boost!
-                                let cfg_boost = crate::system::config::load_config().fan_boost;
-                                c.fan_boost = cfg_boost;
-                                // Self-healing: if software Fan Boost is ON but EC clamp bit dropped, re-assert clamp!
-                                if cfg_boost && (raw_fan_clamp & wmi_ec::FAN_BOOST_CLAMP_BIT) == 0 {
-                                    let _ = wmi_ec::wmi_write_ec(wmi_ec::ADDR_FAN_BOOST_CLAMP, raw_fan_clamp | wmi_ec::FAN_BOOST_CLAMP_BIT);
-                                }
-                            }
+                            c.fan_boost = (raw_fan_clamp & wmi_ec::FAN_BOOST_CLAMP_BIT) != 0;
                         }
 
                         // 2. Power Mode - Respect user action cooldown window!
@@ -204,7 +178,7 @@ impl EcBridge {
                         // 5. Battery Gate Watchdog: Protect platform override from accidental drop (Tongfang platforms only)
                         if now >= c.battery_limit_cooldown_until {
                             let cfg_snap = crate::system::config::load_config();
-                            if crate::hal::declarative::load_matched_manifest().is_none() && cfg_snap.battery_hardware_limit_enabled && c.battery_limit < 95 {
+                            if cfg_snap.battery_hardware_limit_enabled && c.battery_limit < 95 {
                                 if let Some(cur_plat_id) = wmi_ec::wmi_read_ec(wmi_ec::ADDR_PLATFORM_REAL_ID) {
                                     if cur_plat_id != 0x04 {
                                         crate::log_warn!(
@@ -390,10 +364,7 @@ impl EcBridge {
         }
 
         thread::spawn(move || {
-            let is_tongfang_hardware = crate::driver::wmi_ec::is_acpi_driver_available()
-                || crate::hal::declarative::load_matched_manifest()
-                    .map(|m| m.channels.values().any(|c| matches!(c, crate::hal::declarative::model_manifest::ChannelDef::AcpiIoctl { .. })))
-                    .unwrap_or(false);
+            let is_tongfang_hardware = crate::driver::wmi_ec::is_acpi_driver_available();
 
             if !is_tongfang_hardware {
                 let health_mode = if limit >= 95 {
@@ -418,19 +389,15 @@ impl EcBridge {
 
             let (limit, down_limit) = crate::machine::battery_charge_window(limit);
 
-            // 0. Platform4 Gate method (for legacy gaming chassis without manifest):
-            //    Only apply platform spoofing on non-declarative gaming platforms
-            let is_declarative = crate::hal::declarative::load_matched_manifest().is_some();
-            if !is_declarative {
-                if hardware_override && limit < 95 {
-                    wmi_ec::wmi_write_ec(wmi_ec::ADDR_PLATFORM_REAL_ID, 0x04);
-                } else {
-                    let cur_id = wmi_ec::wmi_read_ec(wmi_ec::ADDR_PLATFORM_REAL_ID).unwrap_or(0x07);
-                    let restore_id = if cur_id == 0x04 || cur_id == 0x05 { 0x07 } else { cur_id };
-                    wmi_ec::wmi_write_ec(wmi_ec::ADDR_PLATFORM_REAL_ID, restore_id);
-                }
-                wmi_ec::wmi_write_ec(wmi_ec::ADDR_BATTERY_PLATFORM_OVERRIDE, wmi_ec::BATTERY_OVERRIDE_RESET_VALUE);
+            // 0. Platform4 gate
+            if hardware_override && limit < 95 {
+                wmi_ec::wmi_write_ec(wmi_ec::ADDR_PLATFORM_REAL_ID, 0x04);
+            } else {
+                let cur_id = wmi_ec::wmi_read_ec(wmi_ec::ADDR_PLATFORM_REAL_ID).unwrap_or(0x07);
+                let restore_id = if cur_id == 0x04 || cur_id == 0x05 { 0x07 } else { cur_id };
+                wmi_ec::wmi_write_ec(wmi_ec::ADDR_PLATFORM_REAL_ID, restore_id);
             }
+            wmi_ec::wmi_write_ec(wmi_ec::ADDR_BATTERY_PLATFORM_OVERRIDE, wmi_ec::BATTERY_OVERRIDE_RESET_VALUE);
 
             // 1. First write cut-off thresholds (Upper, Lower)
             wmi_ec::wmi_write_ec(wmi_ec::ADDR_BATTERY_LIMIT_UP, limit);
@@ -444,7 +411,7 @@ impl EcBridge {
 
             // 3. Immediately align Q-Key LED clamp for active Office or Balance mode under platform override (Gaming laptops only)
             let current_power_mode = crate::system::config::load_config().power_mode;
-            if !crate::hal::platform_probe::is_ultrabook() && (current_power_mode == 1 || current_power_mode == 2) {
+            if current_power_mode == 1 || current_power_mode == 2 {
                 let fan_boost = crate::system::config::load_config().fan_boost;
                 let boost_bit = if fan_boost { wmi_ec::FAN_BOOST_CLAMP_BIT } else { 0 };
                 let target_clamp = (if current_power_mode == 1 { 0xA0 } else { 0x00 }) | boost_bit;

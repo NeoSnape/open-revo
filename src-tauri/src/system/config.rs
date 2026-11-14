@@ -835,17 +835,7 @@ pub fn get_default_builtin_presets() -> Vec<CustomProfilePreset> {
     let quiet_tgp = ((base_tgp as f32) * 0.75).round().clamp(35.0, 95.0) as u8;
     let quiet_db = max_db.min(10);
 
-    // Adapt to hardware capabilities (e.g. Baolongda / non-Tongfang models)
-    let (fan_ramp, fan_isolated, fan_linked, super_perf) = if let Some(manifest) = crate::hal::declarative::load_matched_manifest() {
-        (
-            manifest.capabilities.fan_ramp_rate,
-            manifest.capabilities.fan_independent_channels,
-            !manifest.capabilities.fan_independent_channels,
-            true,
-        )
-    } else {
-        (true, true, true, true)
-    };
+    let (fan_ramp, fan_isolated, fan_linked, super_perf) = (true, true, true, true);
 
     vec![
         CustomProfilePreset {

@@ -177,23 +177,8 @@ pub fn check_dgpu_present() -> bool {
 
 /// Determines whether the machine is a thin-and-light laptop or pure iGPU laptop
 pub fn is_thin_and_light_or_pure_igpu() -> bool {
-    // 1. Unified ultrabook / thin-and-light platform probe check
-    if crate::hal::platform_probe::is_ultrabook() {
-        return true;
-    }
-
-    // 2. Driver backend check
-    let hal = crate::hal::get_hardware_driver();
-    if hal.kind() != crate::hal::DriverKind::TongfangAcpi {
-        return true;
-    }
-
-    // 3. Physical discrete GPU presence check
-    if !check_dgpu_present() {
-        return true;
-    }
-
-    false
+    // The only way this is true on the 极光 X Pro: the dGPU is switched off (iGPU-only mode).
+    !check_dgpu_present()
 }
 
 /// Pure decision function for power online status across laptop topologies.
@@ -251,48 +236,8 @@ pub fn set_power_mode(mode: u8, app: AppHandle, ec_state: State<'_, SharedEcBrid
         };
         return Err(msg.to_string());
     }
-    let is_declarative = crate::hal::declarative::load_matched_manifest().is_some();
-    let is_tongfang_acpi_channel = crate::driver::wmi_ec::is_acpi_driver_available()
-        || crate::hal::declarative::load_matched_manifest()
-            .map(|m| m.channels.values().any(|c| matches!(c, crate::hal::declarative::model_manifest::ChannelDef::AcpiIoctl { .. })))
-            .unwrap_or(false);
-
-    if is_tongfang_acpi_channel {
-        // Tongfang ODM models (both Gaming laptops and Thin & Lights like Wujie 14X/15X):
-        // Must invoke apply_full_power_mode to commit physical MODE_INDEX, TRIGGER_BYTE, and PL targets!
-        ec_state.lock().set_power_mode(mode);
-    } else if is_thin_and_light || is_declarative {
-        let hal = crate::hal::get_hardware_driver();
-        let hw_mode = match mode {
-            1 => crate::hal::HardwarePowerMode::Office,
-            2 => crate::hal::HardwarePowerMode::Balance,
-            3 => crate::hal::HardwarePowerMode::Turbo,
-            4 => crate::hal::HardwarePowerMode::Custom,
-            _ => crate::hal::HardwarePowerMode::Balance,
-        };
-        if let Err(e) = hal.set_performance_mode(hw_mode) {
-            crate::log_warn!("POWER_CMD", "Direct HAL set_performance_mode failed: {}", e);
-        } else {
-            crate::log_info!("POWER_CMD", "Direct HAL applied performance mode {:?}", hw_mode);
-        }
-        ec_state.lock().set_power_mode_from_hardware(mode);
-        if mode == 4 {
-            if cfg.custom_profile.fan_isolated_output || cfg.custom_profile.fan_curve_enabled {
-                crate::driver::bld_driver_mgr::set_bld_fan_curve(
-                    cfg.custom_profile.cpu_fan_curve.clone(),
-                    cfg.custom_profile.gpu_fan_curve.clone(),
-                    cfg.custom_profile.fan_ramp_rate,
-                    cfg.custom_profile.fan_ramp_speed_ms,
-                );
-            } else if !cfg.fan_boost {
-                crate::driver::bld_driver_mgr::restore_bld_fan_auto();
-            }
-        } else if !cfg.fan_boost {
-            crate::driver::bld_driver_mgr::restore_bld_fan_auto();
-        }
-    } else {
-        ec_state.lock().set_power_mode(mode);
-    }
+    // Applies MODE_INDEX, TRIGGER_BYTE, PL targets and the fan table (apply_full_power_mode).
+    ec_state.lock().set_power_mode(mode);
     cfg.power_mode = mode;
     if is_dc {
         cfg.power_mode_ac = mode;

@@ -183,15 +183,8 @@ impl CpuMonitor {
             };
 
             let _num_cpus = num_cpus();
-            let is_ultrabook = crate::hal::platform_probe::is_ultrabook();
 
             loop {
-                if is_ultrabook && !crate::system::telemetry::is_telemetry_active() {
-                    // Ultrabook background suspension: zero CPU / PDH polling when OpenRevo is not in foreground!
-                    thread::sleep(Duration::from_millis(3000));
-                    continue;
-                }
-
                 // 1. Calculate CPU Usage via GetSystemTimes
                 if let Some(ref get_times) = get_system_times {
                     let mut idle = FILETIME::default();

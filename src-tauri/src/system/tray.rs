@@ -89,7 +89,6 @@ pub fn safe_hardware_shutdown_on_exit() {
     crate::log_info!("POWER_EVENT", "App exiting: handing logo & keyboard lighting back to the MCU.");
     crate::driver::ite_lighting::IteLightingManager::handover_logo_on_exit();
     crate::driver::ite_streamer::get_global_streamer().handover_to_hardware_on_exit();
-    crate::driver::bld_driver_mgr::shutdown_bld_driver_on_exit();
 }
 
 /// Constructs the full tray menu with power modes, fan boost, OEM toggle, and notice items.

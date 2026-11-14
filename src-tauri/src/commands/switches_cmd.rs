@@ -7,8 +7,7 @@ use crate::system::hooks;
 #[tauri::command]
 pub fn set_win_key_locked(locked: bool) -> bool {
     hooks::set_win_key_locked(locked);
-    let is_ultrabook = crate::hal::platform_probe::is_ultrabook();
-    let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family() && !is_ultrabook;
+    let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family();
     if supports_legacy_ec {
         let hw_locked = crate::driver::wmi_ec::is_winkey_locked_hw();
         if hw_locked != locked {

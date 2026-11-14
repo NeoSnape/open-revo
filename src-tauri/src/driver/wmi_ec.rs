@@ -397,21 +397,9 @@ pub fn trigger_ec_action(mask: u8) -> bool {
 }
 
 pub fn is_fan_boost_active() -> bool {
-    let is_tongfang_hardware = is_acpi_driver_available()
-        || crate::hal::declarative::load_matched_manifest()
-            .map(|m| m.channels.values().any(|c| matches!(c, crate::hal::declarative::model_manifest::ChannelDef::AcpiIoctl { .. })))
-            .unwrap_or(false);
-
-    if is_tongfang_hardware {
-        let s1873 = wmi_read_ec(ADDR_FAN_BOOST_CLAMP).unwrap_or(0);
-        return (s1873 & FAN_BOOST_CLAMP_BIT) != 0;
-    }
-
-    let is_bld = crate::hal::declarative::load_matched_manifest()
-        .map(|m| m.channels.values().any(|c| matches!(c, crate::hal::declarative::model_manifest::ChannelDef::WmiMailbox { .. })))
-        .unwrap_or(false);
-    if is_bld {
-        return crate::driver::bld_driver_mgr::is_bld_fan_clamped();
+    if is_acpi_driver_available() {
+        let clamp = wmi_read_ec(ADDR_FAN_BOOST_CLAMP).unwrap_or(0);
+        return (clamp & FAN_BOOST_CLAMP_BIT) != 0;
     }
 
     crate::system::config::load_config().fan_boost
@@ -486,10 +474,7 @@ pub fn is_nextgen_oem_magic_ec() -> bool {
 ///   - Disable: ADDR_FAN_BOOST_CLAMP &= !FAN_BOOST_CLAMP_BIT
 /// Instant speed-up and instant release with zero delay.
 pub fn set_fan_boost_hardware(enable: bool) -> bool {
-    let is_tongfang_hardware = is_acpi_driver_available()
-        || crate::hal::declarative::load_matched_manifest()
-            .map(|m| m.channels.values().any(|c| matches!(c, crate::hal::declarative::model_manifest::ChannelDef::AcpiIoctl { .. })))
-            .unwrap_or(false);
+    let is_tongfang_hardware = is_acpi_driver_available();
 
     if !is_tongfang_hardware {
         let hal = crate::hal::get_hardware_driver();
@@ -576,18 +561,6 @@ impl Default for HardwareSupportFlags {
 pub fn get_hardware_support_flags() -> HardwareSupportFlags {
     static CACHED_FLAGS: std::sync::OnceLock<HardwareSupportFlags> = std::sync::OnceLock::new();
     *CACHED_FLAGS.get_or_init(|| {
-
-        if crate::hal::platform_probe::is_ultrabook() {
-            return HardwareSupportFlags {
-                has_fan_boost: false,
-                has_lightbar: false,
-                has_win_lock: true,
-                has_fn_lock: false,
-                has_battery_limit: true,
-                is_rgb_keyboard: false,
-                has_water_cooler: false,
-            };
-        }
 
         // Truth-layer detection: query BIOS Capability byte, peripheral handshake status, or Windows paired cooler
         let raw_cooler_status = wmi_read_ec(ADDR_WATER_COOLER_FLAG).unwrap_or(0);

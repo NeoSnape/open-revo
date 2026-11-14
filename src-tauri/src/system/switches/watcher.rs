@@ -12,8 +12,7 @@ pub fn start_hardware_state_watcher(
 ) {
     std::thread::spawn(move || {
         crate::log_info!("DEVICE_SWITCH", "Starting hardware state watcher (Bluetooth, Wi-Fi, Camera, WinLock, FnLock)...");
-        let is_ultrabook = crate::hal::platform_probe::is_ultrabook();
-        let supports_legacy_ec_switches = crate::hal::platform_probe::is_tongfang_family() && !is_ultrabook;
+        let supports_legacy_ec_switches = crate::hal::platform_probe::is_tongfang_family();
         let cfg = crate::system::config::load_config();
         if cfg.keep_awake_enabled {
             super::set_keep_awake(true);
@@ -377,7 +376,7 @@ pub fn start_hardware_state_watcher(
                     }
 
                     // Auto-fallback keyboard engine to factory hardware mode on battery (Gaming laptops only)
-                    if !is_ultrabook && cfg.auto_fallback_kb_on_battery {
+                    if cfg.auto_fallback_kb_on_battery {
                         let lighting = crate::driver::ite_lighting::get_global_lighting();
                         if lighting.has_keyboard_device() {
                             let current_engine = {
@@ -425,7 +424,7 @@ pub fn start_hardware_state_watcher(
                         }
                     }
 
-                    if !is_ultrabook {
+                    {
                         // Auto-restore BetterRGB streamer on AC plug-in
                         let lighting = crate::driver::ite_lighting::get_global_lighting();
                         if cfg.auto_fallback_kb_on_battery && lighting.has_keyboard_device() {
@@ -475,7 +474,7 @@ pub fn start_hardware_state_watcher(
             if cur_mode != 4 {
                 last_custom_trace = None;
             }
-            if !is_ultrabook && cur_mode == 4 && supports_legacy_ec_switches {
+            if cur_mode == 4 && supports_legacy_ec_switches {
                 custom_trace_ticks = custom_trace_ticks.wrapping_add(1);
                 if let Some((curr_mhz, max_mhz, limit_mhz)) = crate::system::power_mode::get_cpu_frequency_info() {
                     let is_throttled = curr_mhz < 1000 && is_dc;

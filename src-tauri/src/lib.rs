@@ -47,10 +47,6 @@ pub fn run() {
 
     // Asynchronously warm up in-memory hardware capability snapshot cache & VBIOS power limits (zero disk persistence)
     std::thread::spawn(|| {
-        if crate::hal::platform_probe::is_ultrabook() {
-            crate::log_info!("MAIN", "[Hardware Probe] Ultrabook detected: skipping gaming dGPU limits & EC power preset probe.");
-            return;
-        }
         crate::log_info!("MAIN", "[Hardware Probe] Warming up in-memory hardware capability snapshot cache...");
         let _ = crate::system::hardware_probe::get_hardware_snapshot_cached();
         let _ = crate::driver::gpu_bridge::query_nvidia_power_limits_static();
@@ -309,8 +305,8 @@ pub fn run() {
 
             // Step 6.5: Start dedicated WMI ACPI event watcher for physical Q-Key mode switch and Fan Boost
             crate::system::boot_trace::boot_scope("Step 6.5: WMI ACPI Listener", || {
-                if crate::hal::platform_probe::is_ultrabook() || !crate::hal::platform_probe::has_acpi_physical_key_events() {
-                    crate::system::boot_trace::boot_log("LISTENER_BYPASS", "Ultrabook detected: AcpiTest_EventULong companion listener bypassed.");
+                if !crate::hal::platform_probe::has_acpi_physical_key_events() {
+                    crate::system::boot_trace::boot_log("LISTENER_BYPASS", "No Tongfang EC channel: AcpiTest_EventULong listener bypassed.");
                     return;
                 }
                 crate::driver::wmi_event_listener::start_wmi_event_listener(app.handle().clone(), ec_for_wmi);

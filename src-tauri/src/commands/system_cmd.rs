@@ -70,19 +70,12 @@ pub fn collect_hardware_state(
     gpu_state: &SharedGpuBridge,
     query_gpu: bool,
 ) -> HardwareState {
-    let is_bld_manifest = crate::hal::declarative::load_matched_manifest()
-        .map(|m| m.channels.values().any(|ch| matches!(ch, crate::hal::declarative::model_manifest::ChannelDef::WmiMailbox { .. })))
-        .unwrap_or(false);
     // 1. Nanosecond EC state copy: Immediately drop lock to prevent cross-thread starvation
-    let (power_mode, fan_boost, battery_limit, mut cpu_fan_rpm, mut gpu_fan_rpm, is_mock) = {
+    let (power_mode, fan_boost, battery_limit, cpu_fan_rpm, gpu_fan_rpm, is_mock) = {
         let ec = ec_state.lock();
         (
             ec.get_power_mode(),
-            if is_bld_manifest {
-                crate::driver::bld_driver_mgr::is_bld_fan_clamped()
-            } else {
-                ec.is_fan_boost()
-            },
+            ec.is_fan_boost(),
             ec.get_battery_limit(),
             ec.get_cpu_fan_rpm(),
             ec.get_gpu_fan_rpm(),
@@ -90,26 +83,8 @@ pub fn collect_hardware_state(
         )
     };
 
-    // On-demand foreground fan telemetry for ultrabooks (zero background polling)
-    if crate::hal::platform_probe::is_ultrabook() {
-        let hal = crate::hal::get_hardware_driver();
-        if let Ok((c_rpm, g_rpm)) = hal.read_fan_rpm() {
-            if c_rpm > 0 {
-                cpu_fan_rpm = c_rpm;
-            }
-            if g_rpm > 0 {
-                gpu_fan_rpm = g_rpm;
-            }
-            ec_state.lock().update_fan_rpm(c_rpm, g_rpm);
-        }
-    }
-
     // 2. Nanosecond GPU telemetry copy: Query only if requested to prevent waking up NVIDIA dGPU from D3Cold
-    let is_discrete_gpu_supported = if let Some(m) = crate::hal::declarative::load_matched_manifest() {
-        m.capabilities.discrete_gpu
-    } else {
-        crate::commands::power_cmd::check_dgpu_present()
-    };
+    let is_discrete_gpu_supported = crate::commands::power_cmd::check_dgpu_present();
 
     let (gpu_temp, gpu_usage, gpu_core_freq, gpu_mem_freq, gpu_vram_mb, gpu_vram_used_mb, gpu_power_w, gpu_name, has_gpu) = {
         if !is_discrete_gpu_supported {
@@ -789,39 +764,34 @@ pub fn get_model_capabilities() -> serde_json::Value {
         });
     }
 
-    // 3. Default fallback capabilities based on unified platform probe
-    let is_thin_light = crate::hal::platform_probe::is_ultrabook();
-    let has_water_cooler = if is_thin_light {
-        false
-    } else {
-        crate::driver::wmi_ec::get_hardware_support_flags().has_water_cooler
-    };
+    // 3. Default fallback capabilities (gaming chassis)
+    let has_water_cooler = crate::driver::wmi_ec::get_hardware_support_flags().has_water_cooler;
 
     serde_json::json!({
-        "id": if is_thin_light { "builtin_thin_light" } else { "builtin_tongfang_gaming" },
-        "name": if is_thin_light { "MECHREVO Thin & Light Laptop" } else { "MECHREVO Gaming Laptop" },
-        "form_factor": if is_thin_light { "thin_light" } else { "gaming" },
-        "ui_preset": if is_thin_light { "ultrabook_compact" } else { "gaming_full" },
-        "discrete_gpu": !is_thin_light,
+        "id": "builtin_tongfang_gaming",
+        "name": "MECHREVO Gaming Laptop",
+        "form_factor": "gaming",
+        "ui_preset": "gaming_full",
+        "discrete_gpu": true,
         "water_cooling": has_water_cooler,
-        "fan_custom_curve": !is_thin_light,
+        "fan_custom_curve": true,
         "fan_independent_channels": true,
         "fan_ramp_rate": true,
-        "fan_control_mode": if is_thin_light { "none" } else { "discrete_table_16" },
-        "fan_boost_mode": if is_thin_light { "none" } else { "hardware_toggle" },
+        "fan_control_mode": "discrete_table_16",
+        "fan_boost_mode": "hardware_toggle",
         "cpu_vendor": detected_cpu_vendor,
-        "cpu_tuning_type": if is_thin_light { "none" } else if is_amd { "amd_smu" } else { "intel_pl" },
+        "cpu_tuning_type": if is_amd { "amd_smu" } else { "intel_pl" },
         "cpu_supports_fppt": is_amd,
-        "gpu_power_tuning_mode": if is_thin_light { "none" } else { "discrete_manual" },
+        "gpu_power_tuning_mode": "discrete_manual",
         "cpu_name": cpu_name,
         "battery_charge_limit": true,
-        "power_modes": if is_thin_light { vec!["office", "balance", "turbo"] } else { vec!["office", "balance", "turbo", "custom"] },
+        "power_modes": vec!["office", "balance", "turbo", "custom"],
         "rgb_keyboard": {
-            "supported": !is_thin_light,
-            "type": if is_thin_light { "none" } else { "per_key_rgb" },
-            "sleep_timeout_supported": is_thin_light,
+            "supported": true,
+            "type": "per_key_rgb",
+            "sleep_timeout_supported": false,
             "timeout_options_seconds": [0, 10, 15, 30, 60],
-            "steps": if is_thin_light { Vec::<u8>::new() } else { Vec::<u8>::new() }
+            "steps": Vec::<u8>::new()
         },
         "is_adapted": true,
         "is_debug_mode": is_debug,

@@ -53,11 +53,7 @@ pub fn get_gpu_mode_info(
     let hw = crate::driver::uefi_nvram::read_gpu_mode();
     let capabilities = crate::driver::uefi_nvram::probe_gpu_capabilities();
     let has_igpu = check_igpu_present();
-    let has_dgpu = if let Some(manifest) = crate::hal::declarative::load_matched_manifest() {
-        manifest.capabilities.discrete_gpu && check_dgpu_present()
-    } else {
-        check_dgpu_present()
-    };
+    let has_dgpu = check_dgpu_present();
     let gpu_name = gpu_state.lock().get_name(0);
 
     let effective_mode = if !has_dgpu {
@@ -291,16 +287,9 @@ pub fn apply_custom_profile(
     }
     crate::system::config::save_config(&cfg);
 
-    // Declarative hardware dispatch on custom profile apply
-    sync_custom_profile_to_declarative_hardware(&profile);
-
     ec_state.lock().set_power_mode(4);
 
     Ok(())
-}
-
-/// Dispatches custom profile SPL/sPPT/Temp parameters to declarative hardware (e.g. Baolongda MRID6/BM5235)
-pub fn sync_custom_profile_to_declarative_hardware(_profile: &crate::system::config::CustomProfileConfig) {
 }
 
 #[tauri::command]
@@ -310,22 +299,6 @@ pub fn apply_fan_curve_live(
     cpu_curve: Vec<crate::system::config::FanCurvePoint>,
     gpu_curve: Vec<crate::system::config::FanCurvePoint>,
 ) -> Result<(), String> {
-    let is_bld_manifest = crate::hal::declarative::load_matched_manifest()
-        .map(|m| m.channels.values().any(|ch| matches!(ch, crate::hal::declarative::model_manifest::ChannelDef::WmiMailbox { .. })))
-        .unwrap_or(false);
-
-    if is_bld_manifest {
-        let cfg = crate::system::config::load_config();
-        crate::driver::bld_driver_mgr::set_bld_fan_curve(
-            cpu_curve,
-            gpu_curve,
-            cfg.custom_profile.fan_ramp_rate,
-            cfg.custom_profile.fan_ramp_speed_ms,
-        );
-        crate::log_info!("BLD_FAN", "BLD live fan curve applied to 1Hz heartbeat arbiter");
-        return Ok(());
-    }
-
     let cfg = crate::system::config::load_config();
     if (cfg.custom_profile.fan_isolated_output || cfg.custom_profile.fan_curve_enabled) && ec_state.lock().is_fan_boost() {
         crate::log_info!("POWER_MODE", "apply_fan_curve_live: Custom fan isolated output is enabled and Fan Boost is ON. Immediately terminating Fan Boost to yield control to live curve!");
@@ -353,28 +326,6 @@ pub fn toggle_fan_isolated_output(
     cfg.custom_profile.fan_isolated_output = enable;
     cfg.custom_profile.fan_curve_enabled = enable;
     crate::system::config::save_config(&cfg);
-
-    let is_bld_manifest = crate::hal::declarative::load_matched_manifest()
-        .map(|m| m.channels.values().any(|ch| matches!(ch, crate::hal::declarative::model_manifest::ChannelDef::WmiMailbox { .. })))
-        .unwrap_or(false);
-
-    if is_bld_manifest {
-        if enable {
-            let c_curve = cpu_curve.unwrap_or_else(|| cfg.custom_profile.cpu_fan_curve.clone());
-            let g_curve = gpu_curve.unwrap_or_else(|| cfg.custom_profile.gpu_fan_curve.clone());
-            crate::driver::bld_driver_mgr::set_bld_fan_curve(
-                c_curve,
-                g_curve,
-                cfg.custom_profile.fan_ramp_rate,
-                cfg.custom_profile.fan_ramp_speed_ms,
-            );
-            crate::log_info!("BLD_FAN", "BLD fan isolated output enabled, running 1Hz curve heartbeat");
-        } else {
-            crate::driver::bld_driver_mgr::restore_bld_fan_auto();
-            crate::log_info!("BLD_FAN", "BLD fan isolated output disabled, restored to factory auto thermal policy");
-        }
-        return Ok(enable);
-    }
 
     if enable && ec_state.lock().is_fan_boost() {
         crate::log_info!("EC_TUNING", "toggle_fan_isolated_output: Enabling fan isolated output while Fan Boost is ON. Terminating Fan Boost to yield to custom curve!");
@@ -457,15 +408,7 @@ pub fn set_active_profile_id(
     }
     if is_dc || cfg.unlock_battery_power_limit {
         cfg.power_mode = 4;
-        let is_declarative = crate::hal::declarative::load_matched_manifest().is_some();
-        if is_declarative {
-            let hal = crate::hal::get_hardware_driver();
-            let _ = hal.set_performance_mode(crate::hal::HardwarePowerMode::Custom);
-            sync_custom_profile_to_declarative_hardware(&target.profile);
-            ec_state.lock().set_power_mode_from_hardware(4);
-        } else {
-            ec_state.lock().set_power_mode(4);
-        }
+        ec_state.lock().set_power_mode(4);
     }
     crate::system::config::save_config(&cfg);
     Ok(target)
@@ -483,7 +426,6 @@ pub fn save_profile_preset(
         cfg.custom_profile = preset.profile.clone();
         cfg.power_mode = 4;
         crate::system::config::save_config(&cfg);
-        sync_custom_profile_to_declarative_hardware(&preset.profile);
     }
     crate::system::power_mode::sync_oem_mode4_profile(&preset.profile);
     Ok(())
@@ -543,25 +485,20 @@ pub fn reset_profile_preset(id: String) -> Result<crate::system::config::CustomP
         target
     };
 
-    let is_declarative = crate::hal::declarative::load_matched_manifest().is_some();
-    if is_declarative {
-        sync_custom_profile_to_declarative_hardware(&target.profile);
-    } else {
-        // Heal GPU hardware contract baseline immediately upon reset
-        crate::driver::wmi_ec::heal_gpu_power_contract(
-            target.profile.gpu_super_perf,
-            Some(target.profile.gpu_db_watts),
-        );
+    // Heal GPU hardware contract baseline immediately upon reset
+    crate::driver::wmi_ec::heal_gpu_power_contract(
+        target.profile.gpu_super_perf,
+        Some(target.profile.gpu_db_watts),
+    );
 
-        // Heal CPU hardware contract baseline immediately upon reset (clear 105C/0x00 wall & break 55W Limp Mode)
-        crate::driver::wmi_ec::heal_cpu_power_contract(
-            target.profile.cpu_pl1_watts as u16,
-            target.profile.cpu_pl2_watts as u16,
-            target.profile.cpu_pl4_watts as u16,
-            target.profile.cpu_temp_target_enabled,
-            target.profile.cpu_temp_target,
-        );
-    }
+    // Heal CPU hardware contract baseline immediately upon reset (clear 105C/0x00 wall & break 55W Limp Mode)
+    crate::driver::wmi_ec::heal_cpu_power_contract(
+        target.profile.cpu_pl1_watts as u16,
+        target.profile.cpu_pl2_watts as u16,
+        target.profile.cpu_pl4_watts as u16,
+        target.profile.cpu_temp_target_enabled,
+        target.profile.cpu_temp_target,
+    );
 
     let mut cfg = crate::system::config::load_config();
     if cfg.active_profile_id == id {
@@ -590,9 +527,6 @@ pub fn heal_gpu_power_contract(
     super_perf_enable: Option<bool>,
     target_db_watts: Option<u8>,
 ) -> Result<bool, String> {
-    if crate::hal::declarative::load_matched_manifest().is_some() {
-        return Ok(true);
-    }
     let cfg = crate::system::config::load_config();
     let super_perf = super_perf_enable.unwrap_or(cfg.custom_profile.gpu_super_perf);
     let db_watts = target_db_watts.or(Some(cfg.custom_profile.gpu_db_watts));
@@ -608,9 +542,6 @@ pub fn heal_cpu_power_contract(
     temp_target_enabled: Option<bool>,
     temp_target: Option<u8>,
 ) -> Result<bool, String> {
-    if crate::hal::declarative::load_matched_manifest().is_some() {
-        return Ok(true);
-    }
     let cfg = crate::system::config::load_config();
     let p1 = pl1.unwrap_or(cfg.custom_profile.cpu_pl1_watts as u16);
     let p2 = pl2.unwrap_or(cfg.custom_profile.cpu_pl2_watts as u16);

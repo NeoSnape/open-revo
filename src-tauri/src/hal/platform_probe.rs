@@ -9,12 +9,6 @@ pub enum PlatformChannelKind {
     TongfangAcpiKernel,
     /// Legacy Tongfang / Hasee Gaming Laptops using Driverless WMI (AcpiTest_MULong)
     LegacyTongfangMulong,
-    /// Modern Thin & Light Laptops using WMI Mailbox (root\wmi: AcpiTest_WMI.OemWMIfun)
-    WmiMailbox,
-    /// Shenzhen IP3 Thin & Light Laptops (Wujie 14 IP3 xN39, PowerSwitchInterface & SuRwECRegInterface)
-    Ip3Wmi,
-    /// Driverless WMI Laptops (Bitland/Baolongda MRID6, etc.)
-    DriverlessWmi,
     /// Fallback / Virtual / Mock Environment
     Unknown,
 }
@@ -123,14 +117,6 @@ pub fn has_acpi_physical_key_events() -> bool {
     is_tongfang_family()
 }
 
-/// Returns true if this platform is a modern thin & light / ultrabook (e.g. Wujie, Xingyao series)
-pub fn is_ultrabook() -> bool {
-    matches!(
-        get_platform_channel(),
-        PlatformChannelKind::WmiMailbox | PlatformChannelKind::Ip3Wmi | PlatformChannelKind::DriverlessWmi
-    )
-}
-
 /// Returns true if this platform is a Legacy Tongfang Gaming Laptop (GTX 10-series / RTX 20-series):
 /// - Has active UWACPIDriver (Tongfang ACPI Kernel interface)
 /// - Not a thin & light ultrabook (has discrete gaming GPU)
@@ -138,9 +124,6 @@ pub fn is_ultrabook() -> bool {
 pub fn is_legacy_pascal_turing_tongfang() -> bool {
     static CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *CACHE.get_or_init(|| {
-        if is_ultrabook() {
-            return false;
-        }
         if !is_tongfang_family() {
             return false;
         }

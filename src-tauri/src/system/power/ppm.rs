@@ -355,10 +355,7 @@ pub fn restore_official_power_plan() -> Result<String, String> {
 
         // 5. Adaptive Re-provisioning for BLD (AMD) vs TongFang (Intel) OEM models
         let (_, is_amd_cpu) = crate::driver::uefi_nvram::get_cpu_info();
-        let is_bld_manifest = crate::hal::declarative::load_matched_manifest()
-            .map(|m| m.id.to_lowercase().contains("bld"))
-            .unwrap_or(false);
-        let is_bld_or_amd = (is_amd_cpu || is_bld_manifest) && !BLD_AMD_PPM_NVME.is_empty();
+        let is_bld_or_amd = is_amd_cpu && !BLD_AMD_PPM_NVME.is_empty();
 
         let return_msg = if is_bld_or_amd {
             crate::log_info!("POWER_PPM", "Target platform detected as BLD/AMD. Deploying official AMD PPM packages...");

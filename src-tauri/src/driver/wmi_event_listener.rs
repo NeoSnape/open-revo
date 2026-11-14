@@ -233,10 +233,10 @@ fn dispatch_acpi_event(
 /// Start the background WMI ACPI Event Listener for physical chassis keys (Q-Key mode switch & Fan Boost)
 /// Pure Rust in-process implementation via Windows COM (IWbemServices::ExecNotificationQuery)
 pub fn start_wmi_event_listener(app_handle: AppHandle, ec_bridge: SharedEcBridge) {
-    if crate::hal::platform_probe::is_ultrabook() || !crate::hal::platform_probe::has_acpi_physical_key_events() {
+    if !crate::hal::platform_probe::has_acpi_physical_key_events() {
         crate::log_info!(
             "WMI_LISTENER",
-            "Ultrabook platform: AcpiTest_EventULong listener bypassed gracefully."
+            "No Tongfang EC channel: AcpiTest_EventULong listener bypassed."
         );
         return;
     }

@@ -59,18 +59,16 @@ static IS_WELCOME_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 pub fn get_global_lighting() -> SharedIteLightingManager {
     GLOBAL_LIGHTING.get_or_init(|| {
         let mgr = Arc::new(IteLightingManager::new());
-        if !crate::hal::platform_probe::is_ultrabook() {
-            let mgr_clone = Arc::clone(&mgr);
-            std::thread::spawn(move || {
-                let saved = mgr_clone.state.lock().clone();
-                if saved.ceremony_enabled {
-                    mgr_clone.trigger_welcome();
-                } else {
-                    mgr_clone.restore_all();
-                }
-            });
-            mgr.start_idle_watcher();
-        }
+        let mgr_clone = Arc::clone(&mgr);
+        std::thread::spawn(move || {
+            let saved = mgr_clone.state.lock().clone();
+            if saved.ceremony_enabled {
+                mgr_clone.trigger_welcome();
+            } else {
+                mgr_clone.restore_all();
+            }
+        });
+        mgr.start_idle_watcher();
         mgr
     }).clone()
 }
@@ -96,9 +94,7 @@ impl IteLightingManager {
             state: Mutex::new(saved_state),
             is_sleeping: std::sync::atomic::AtomicBool::new(false),
         };
-        if !crate::hal::platform_probe::is_ultrabook() {
-            mgr.refresh_devices();
-        }
+        mgr.refresh_devices();
         mgr
     }
 
@@ -226,9 +222,6 @@ impl IteLightingManager {
 
     /// Resume from system sleep/hibernate with full device re-enumeration and engine-aware restoration
     pub fn resume_after_wake(&self) {
-        if crate::hal::platform_probe::is_ultrabook() {
-            return;
-        }
         println!("[ITE Lighting] System resumed from Sleep / Hibernate! Reconnecting USB HID devices...");
         crate::driver::ite_streamer::get_global_streamer().set_unsupported(false);
         self.invalidate_devices();

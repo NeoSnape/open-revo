@@ -105,8 +105,7 @@ pub fn get_switches_state() -> QuickSwitchesState {
         }
 
         // 2. Win Key Lock restore
-        let is_ultrabook = crate::hal::platform_probe::is_ultrabook();
-        let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family() && !is_ultrabook;
+        let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family();
         if supports_legacy_ec {
             let hw_locked = crate::driver::wmi_ec::is_winkey_locked_hw();
             if hw_locked != cfg.win_key_locked {
@@ -341,8 +340,7 @@ pub fn set_switch(switch_name: &str, enable: bool) -> Result<bool, String> {
             crate::system::hooks::set_win_key_locked(enable);
 
             // 2. Hardware EC Keyboard Controller WinLock Trigger (pulsed on state difference)
-            let is_ultrabook = crate::hal::platform_probe::is_ultrabook();
-            let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family() && !is_ultrabook;
+            let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family();
             if supports_legacy_ec {
                 let hw_locked = crate::driver::wmi_ec::is_winkey_locked_hw();
                 if hw_locked != enable {
