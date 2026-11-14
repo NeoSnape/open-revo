@@ -7,100 +7,6 @@ import { MiniDrawer } from './components/MiniDrawer';
 import { FullDashboard } from './components/FullDashboard';
 import { ModelCapabilities } from './plugins/plugin_manifest';
 
-const BLD_PREVIEW_STATE: HardwareState = {
-  power_mode: 2,
-  fan_boost: false,
-  battery_limit: 80,
-  cpu_temp: 84,
-  cpu_usage: 2,
-  cpu_freq: 5001,
-  cpu_power_w: 43.3,
-  gpu_temp: 55,
-  gpu_core_freq: 2310,
-  gpu_usage: 24,
-  gpu_power_w: 28.1,
-  cpu_fan_rpm: 3075,
-  gpu_fan_rpm: 3098,
-  gpu_vram_mb: 8192,
-  gpu_vram_used_mb: 1331,
-  gpu_mem_freq: 8001,
-  refresh_rate: 240,
-  available_refresh_rates: [60, 240],
-  monitors: [
-    {
-      device_name: 'DISPLAY1',
-      friendly_name: '内嵌屏 [2.5K 16:10]',
-      is_primary: true,
-      is_internal: true,
-      width: 2560,
-      height: 1600,
-      current_hz: 240,
-      supported_rates: [60, 240],
-    },
-  ],
-  auto_min_refresh_on_battery: true,
-  win_key_locked: false,
-  is_mock: true,
-  oem_running: false,
-  autostart: false,
-  cpu_name: 'AMD Ryzen 9 7940HX with Radeon Graphics',
-  gpu_name: 'NVIDIA GeForce RTX 4060 Laptop GPU',
-  model_name: 'MECHREVO Jiaolong 16 Pro',
-  board_name: 'MRID6-23',
-  support_flags: {
-    has_fan_boost: true,
-    has_lightbar: false,
-    has_win_lock: true,
-    has_fn_lock: false,
-    has_battery_limit: false,
-    is_rgb_keyboard: true,
-    has_water_cooler: false,
-  },
-  power_presets: {
-    hardware_read: true,
-    office_pl1: 45,
-    office_pl2: 55,
-    balance_pl1: 80,
-    balance_pl2: 95,
-    turbo_pl1: 115,
-    turbo_pl2: 125,
-    base_tgp: 0,
-    max_db: 0,
-  },
-};
-
-const BLD_PREVIEW_CAPABILITIES: ModelCapabilities = {
-  id: 'mechrevo_jiaolong_16_bld',
-  name: 'MECHREVO Jiaolong 16 Pro (AMD Dragon Range / Baolongda MRID6)',
-  form_factor: 'gaming',
-  ui_preset: 'gaming_full',
-  discrete_gpu: true,
-  water_cooling: false,
-  fan_custom_curve: true,
-  fan_independent_channels: true,
-  fan_ramp_rate: true,
-  fan_control_mode: 'direct_rpm_clamp',
-  fan_boost_mode: 'direct_rpm_clamp',
-  max_fan_rpm: 5800,
-  cpu_vendor: 'amd',
-  cpu_tuning_type: 'amd_smu',
-  cpu_supports_fppt: false,
-  gpu_power_tuning_mode: 'mode_locked',
-  battery_charge_limit: false,
-  power_modes: ['office', 'balance', 'turbo', 'custom'],
-  power_mode_watts: {
-    office: 45,
-    balance: 80,
-    turbo: 115,
-    custom: 115,
-  },
-  rgb_keyboard: {
-    supported: true,
-    type: 'single_zone_rgb',
-    steps: [0, 1, 2, 3],
-  },
-};
-
 const DEFAULT_STATE: HardwareState = {
   power_mode: 2,
   fan_boost: false,
@@ -128,78 +34,27 @@ const DEFAULT_STATE: HardwareState = {
 
 export default function App() {
   const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-  const isBldPreview = urlParams?.get('preview') === 'bld';
 
-  const [isExpanded, setIsExpanded] = useState(isBldPreview);
+  const [isExpanded, setIsExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'fan' | 'gpu' | 'tuning' | 'lighting' | 'system'>(
     (import.meta.env.DEV && (urlParams?.get('tab') as any)) || 'overview'
   );
   const [openCustomTuning, setOpenCustomTuning] = useState(import.meta.env.DEV && urlParams?.get('custom') === '1');
-  const [hardwareState, setHardwareState] = useState<HardwareState>(isBldPreview ? BLD_PREVIEW_STATE : DEFAULT_STATE);
+  const [hardwareState, setHardwareState] = useState<HardwareState>(DEFAULT_STATE);
   const [isTauriEnv, setIsTauriEnv] = useState(false);
 
   // Model Capabilities (Declarative Hardware Driver Contract)
-  const realCapabilitiesRef = useRef<ModelCapabilities | undefined>(isBldPreview ? BLD_PREVIEW_CAPABILITIES : undefined);
-  const [capabilities, setCapabilities] = useState<ModelCapabilities | undefined>(isBldPreview ? BLD_PREVIEW_CAPABILITIES : undefined);
-  const [previewMode, setPreviewMode] = useState<'real' | 'thin_light' | 'gaming'>('real');
+  const [capabilities, setCapabilities] = useState<ModelCapabilities | undefined>(undefined);
 
   useEffect(() => {
-    if (isBldPreview) return;
     invoke<ModelCapabilities>('get_model_capabilities')
       .then((caps) => {
         if (caps) {
-          realCapabilitiesRef.current = caps;
           setCapabilities(caps);
         }
       })
       .catch((err) => console.warn('Failed to load model capabilities in App:', err));
-  }, [isBldPreview]);
-
-  const handlePreviewFormFactor = useCallback((mode: 'real' | 'thin_light' | 'gaming') => {
-    setPreviewMode(mode);
-    if (mode === 'real') {
-      if (realCapabilitiesRef.current) {
-        setCapabilities({ ...realCapabilitiesRef.current });
-      }
-    } else if (mode === 'thin_light') {
-      setCapabilities({
-        ...(realCapabilitiesRef.current || {}),
-        id: 'preview_xingyao_14',
-        name: 'MECHREVO Xingyao 14 (UI Preview)',
-        form_factor: 'thin_light',
-        ui_preset: 'ultrabook_compact',
-        discrete_gpu: false,
-        water_cooling: false,
-        fan_custom_curve: false,
-        battery_charge_limit: true,
-        power_modes: ['office', 'balance', 'turbo'],
-        rgb_keyboard: { supported: true, type: 'monochrome_stepped', steps: [0, 1, 2, 3, 4] },
-        is_debug_mode: true,
-      });
-    } else if (mode === 'gaming') {
-      setCapabilities({
-        ...(realCapabilitiesRef.current || {}),
-        id: 'preview_gaming',
-        name: 'MECHREVO Gaming Laptop (UI Preview)',
-        form_factor: 'gaming',
-        ui_preset: 'gaming_full',
-        discrete_gpu: true,
-        water_cooling: true,
-        fan_custom_curve: true,
-        battery_charge_limit: true,
-        power_modes: ['office', 'balance', 'turbo', 'custom'],
-        rgb_keyboard: { supported: true, type: 'per_key_rgb' },
-        is_debug_mode: true,
-      });
-    }
   }, []);
-
-  useEffect(() => {
-    (window as any).__OPENREVO_PREVIEW__ = handlePreviewFormFactor;
-    return () => {
-      delete (window as any).__OPENREVO_PREVIEW__;
-    };
-  }, [handlePreviewFormFactor]);
 
   const [theme, setTheme] = useState<'mono' | 'cyber'>(() => {
     return (localStorage.getItem('openrevo_theme') as 'mono' | 'cyber') ||
@@ -231,7 +86,6 @@ export default function App() {
 
   // Poll hardware status
   const fetchStatus = useCallback(async () => {
-    if (isBldPreview) return;
     try {
       const state = await invoke<HardwareState>('get_hardware_status');
       const now = Date.now();
@@ -254,10 +108,9 @@ export default function App() {
       // In standalone web browser dev mode, keep simulation state
       setIsTauriEnv(false);
     }
-  }, [isBldPreview]);
+  }, []);
 
   useEffect(() => {
-    if (isBldPreview) return;
     // Initial sync from persistent config on boot
     const bootSync = async () => {
       try {
@@ -492,10 +345,8 @@ export default function App() {
   };
 
   // Fan Boost
-  const handleToggleFanBoost = async (targetRpm?: number) => {
+  const handleToggleFanBoost = async () => {
     const nextVal = !hardwareState.fan_boost;
-    const isBld = capabilities?.fan_boost_mode === 'direct_rpm_clamp';
-    const rpmVal = typeof targetRpm === 'number' && targetRpm > 0 ? targetRpm : 5800;
     overrideLockRef.current.fan_boost = { val: nextVal, expiry: Date.now() + 4000 };
     setHardwareState((prev) => ({
       ...prev,
@@ -503,11 +354,7 @@ export default function App() {
     }));
     if (isTauriEnv) {
       try {
-        if (isBld) {
-          await invoke('set_bld_fan_speed_cap', { rpm: nextVal ? rpmVal : 0 });
-        } else {
-          await invoke('set_fan_boost', { enable: nextVal });
-        }
+        await invoke('set_fan_boost', { enable: nextVal });
       } catch (e) {
         console.error('Failed to toggle fan boost:', e);
       }
@@ -677,8 +524,6 @@ export default function App() {
           initialTab={activeTab}
           initialOpenCustomTuning={openCustomTuning}
           capabilities={capabilities}
-          previewMode={previewMode}
-          onPreviewFormFactor={handlePreviewFormFactor}
         />
       ) : (
         <MiniDrawer

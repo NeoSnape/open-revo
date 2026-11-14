@@ -14,7 +14,6 @@ import { FanCurveEditor } from './tuning/FanCurveEditor';
 import { TuningToolbar } from './tuning/TuningToolbar';
 import { CpuTuningSection } from './tuning/CpuTuningSection';
 import { GpuTuningSection } from './tuning/GpuTuningSection';
-import { BldFanStrategyPanel } from './tuning/BldFanStrategyPanel';
 
 export const DEFAULT_8_POINT_CURVE: FanCurvePoint[] = [
   { temp: 40, duty: 22 },
@@ -39,7 +38,6 @@ interface CustomTuningPanelProps {
   capabilities?: ModelCapabilities;
   onClose?: () => void;
   onApplied?: () => void;
-  onToggleFanBoost?: () => void;
 }
 
 const DEFAULT_PROFILE: CustomProfileConfig = {
@@ -70,34 +68,9 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
   capabilities,
   onClose,
   onApplied,
-  onToggleFanBoost,
 }) => {
   const [modelCaps, setModelCaps] = useState<ModelCapabilities | undefined>(capabilities);
   useEffect(() => {
-    const isBldPreview = typeof window !== 'undefined' && window.location.search.includes('preview=bld');
-    if (isBldPreview) {
-      setModelCaps({
-        id: 'mechrevo_jiaolong_16_bld',
-        name: 'MECHREVO Jiaolong 16 Pro (AMD + RTX / Baolongda BM5235)',
-        form_factor: 'gaming',
-        discrete_gpu: true,
-        water_cooling: false,
-        fan_custom_curve: true,
-        fan_independent_channels: true,
-        fan_ramp_rate: true,
-        fan_control_mode: 'direct_rpm_clamp',
-        fan_boost_mode: 'direct_rpm_clamp',
-        max_fan_rpm: 5800,
-        cpu_vendor: 'amd',
-        cpu_tuning_type: 'amd_smu',
-        cpu_supports_fppt: false,
-        gpu_power_tuning_mode: 'mode_locked',
-        battery_charge_limit: false,
-        power_modes: ['office', 'balance', 'turbo', 'custom'],
-      });
-      return;
-    }
-
     if (!modelCaps) {
       invoke<ModelCapabilities>('get_model_capabilities')
         .then((res) => {
@@ -119,46 +92,7 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
   appConfigRef.current = appConfig;
   const [gpuCaps, setGpuCaps] = useState<GpuTuningCapabilities | null>(null);
 
-  const isDirectRpmFan = capabilities?.fan_boost_mode === 'direct_rpm_clamp' || modelCaps?.fan_boost_mode === 'direct_rpm_clamp';
-  const minDutyFloor = isDirectRpmFan ? 22 : 0;
-
-  useEffect(() => {
-    if (minDutyFloor > 0) {
-      setProfile((prev) => {
-        const hasCpuBelow = prev.cpu_fan_curve?.some((p) => p.duty < minDutyFloor);
-        const hasGpuBelow = prev.gpu_fan_curve?.some((p) => p.duty < minDutyFloor);
-        if (hasCpuBelow || hasGpuBelow) {
-          return {
-            ...prev,
-            cpu_fan_curve: normalizeFanCurve8(prev.cpu_fan_curve, minDutyFloor),
-            gpu_fan_curve: normalizeFanCurve8(prev.gpu_fan_curve, minDutyFloor),
-          };
-        }
-        return prev;
-      });
-    }
-  }, [minDutyFloor]);
-
-  const presets = React.useMemo(() => {
-    const isBldPreview = typeof window !== 'undefined' && window.location.search.includes('preview=bld');
-    if (isBldPreview) {
-      return {
-        office_pl1: 45,
-        office_pl2: 45,
-        office_pl4: 45,
-        balance_pl1: 80,
-        balance_pl2: 80,
-        balance_pl4: 80,
-        turbo_pl1: 115,
-        turbo_pl2: 115,
-        turbo_pl4: 115,
-        base_tgp: 115,
-        max_db: 25,
-        hardware_read: true,
-      };
-    }
-    return status.power_presets;
-  }, [status.power_presets]);
+  const presets = status.power_presets;
   const minPl = Math.min(15, presets?.office_pl1 || 35);
   const turboPl1 = presets?.turbo_pl1 || 90;
   const turboPl2 = presets?.turbo_pl2 || turboPl1;
@@ -254,21 +188,7 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
         setAppConfig(populatedCfg);
         appConfigRef.current = populatedCfg;
       }
-      const isBldPreview = typeof window !== 'undefined' && window.location.search.includes('preview=bld');
-      if (isBldPreview) {
-        setGpuCaps({
-          gpu_generation: 40,
-          gpu_name: 'NVIDIA GeForce RTX 4060 Laptop GPU',
-          supports_gpu_tuning: true,
-          supports_db: true,
-          supports_ctgp: true,
-          is_full_power: false,
-          ctgp_floor_watts: 50,
-          base_tgp_max_watts: 115,
-          max_db_watts: 25,
-          max_total_tgp: 140,
-        });
-      } else if (caps) {
+      if (caps) {
         setGpuCaps(caps);
       }
       const activePreset = list.find((p) => p.id === activeId) || list[0];
@@ -281,8 +201,8 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
         const safeProfile: CustomProfileConfig = {
           ...activePreset.profile,
           cpu_temp_target: Math.max(targetMin, Math.min(targetMax, activePreset.profile.cpu_temp_target || 95)),
-          cpu_fan_curve: normalizeFanCurve8(activePreset.profile.cpu_fan_curve, minDutyFloor),
-          gpu_fan_curve: normalizeFanCurve8(activePreset.profile.gpu_fan_curve, minDutyFloor),
+          cpu_fan_curve: normalizeFanCurve8(activePreset.profile.cpu_fan_curve),
+          gpu_fan_curve: normalizeFanCurve8(activePreset.profile.gpu_fan_curve),
         };
         initialProfileRef.current = JSON.stringify(safeProfile);
         setProfile(safeProfile);
@@ -406,8 +326,8 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
       const safeProfile: CustomProfileConfig = {
         ...target.profile,
         cpu_temp_target: Math.max(targetMin, Math.min(targetMax, target.profile.cpu_temp_target || 95)),
-        cpu_fan_curve: normalizeFanCurve8(target.profile.cpu_fan_curve, minDutyFloor),
-        gpu_fan_curve: normalizeFanCurve8(target.profile.gpu_fan_curve, minDutyFloor),
+        cpu_fan_curve: normalizeFanCurve8(target.profile.cpu_fan_curve),
+        gpu_fan_curve: normalizeFanCurve8(target.profile.gpu_fan_curve),
       };
       initialProfileRef.current = JSON.stringify(safeProfile);
       setProfile(safeProfile);
@@ -470,15 +390,14 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
         cpu_pl1_watts: Math.max(minPl, Math.min(defaultMaxPl1, res.profile.cpu_pl1_watts)),
         cpu_pl2_watts: Math.max(minPl, Math.min(defaultMaxPl2, res.profile.cpu_pl2_watts)),
         cpu_pl4_watts: Math.max(minPl + pl4Margin, Math.min(defaultMaxPl4, res.profile.cpu_pl4_watts)),
-        cpu_fan_curve: normalizeFanCurve8(res.profile.cpu_fan_curve, minDutyFloor),
-        gpu_fan_curve: normalizeFanCurve8(res.profile.gpu_fan_curve, minDutyFloor),
+        cpu_fan_curve: normalizeFanCurve8(res.profile.cpu_fan_curve),
+        gpu_fan_curve: normalizeFanCurve8(res.profile.gpu_fan_curve),
       };
       initialProfileRef.current = JSON.stringify(safeProfile);
       setProfile(safeProfile);
       setPresetsList((prev) => prev.map((p) => (p.id === activeProfileId ? { ...res, profile: safeProfile } : p)));
       await invoke('apply_custom_profile', { profile: safeProfile });
-      const isBld = isDirectRpmFan;
-      if (safeProfile.fan_isolated_output || isBld) {
+      if (safeProfile.fan_isolated_output) {
         triggerLiveFanApply(safeProfile.cpu_fan_curve, safeProfile.gpu_fan_curve);
       }
       setResetSuccess(true);
@@ -718,8 +637,7 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
   };
 
   const triggerLiveFanApply = (cpuCurve: FanCurvePoint[], gpuCurve: FanCurvePoint[]) => {
-    const isBld = isDirectRpmFan;
-    if (!isBld && status.power_mode !== 4) return;
+    if (status.power_mode !== 4) return;
     if (liveFanDebounceRef.current) {
       clearTimeout(liveFanDebounceRef.current);
     }
@@ -731,14 +649,13 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
   };
 
   const handleCurveChange = (type: 'cpu' | 'gpu', newCurve: FanCurvePoint[]) => {
-    const isBld = isDirectRpmFan;
     if (profile.fan_curve_linked) {
       setProfile((prev) => ({
         ...prev,
         cpu_fan_curve: newCurve,
         gpu_fan_curve: newCurve,
       }));
-      if (profile.fan_isolated_output || isBld) {
+      if (profile.fan_isolated_output) {
         triggerLiveFanApply(newCurve, newCurve);
       }
     } else {
@@ -746,21 +663,20 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
       const nextCpu = type === 'cpu' ? newCurve : profile.cpu_fan_curve;
       const nextGpu = type === 'gpu' ? newCurve : profile.gpu_fan_curve;
       setProfile((prev) => ({ ...prev, [curveKey]: newCurve }));
-      if (profile.fan_isolated_output || isBld) {
+      if (profile.fan_isolated_output) {
         triggerLiveFanApply(nextCpu, nextGpu);
       }
     }
   };
 
   const handleToggleFanCurveLinked = (linked: boolean) => {
-    const isBld = isDirectRpmFan;
     setProfile((prev) => {
       const next = { ...prev, fan_curve_linked: linked };
       if (linked) {
         const activeCurve = fanCurveTab === 'cpu' ? prev.cpu_fan_curve : prev.gpu_fan_curve;
         next.cpu_fan_curve = activeCurve;
         next.gpu_fan_curve = activeCurve;
-        if (prev.fan_isolated_output || isBld) {
+        if (prev.fan_isolated_output) {
           triggerLiveFanApply(activeCurve, activeCurve);
         }
       }
@@ -769,9 +685,8 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
   };
 
   const handleToggleFanRampRate = async (nextVal: boolean) => {
-    const isBld = isDirectRpmFan;
     setProfile((p) => ({ ...p, fan_ramp_rate: nextVal }));
-    if (status.power_mode === 4 || isBld) {
+    if (status.power_mode === 4) {
       try {
         await invoke('toggle_fan_ramp_rate', {
           enable: nextVal,
@@ -784,9 +699,8 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
   };
 
   const handleToggleFanIsolated = async (nextVal: boolean) => {
-    const isBld = isDirectRpmFan;
     setProfile((p) => ({ ...p, fan_isolated_output: nextVal, fan_curve_enabled: nextVal }));
-    if (status.power_mode === 4 || isBld) {
+    if (status.power_mode === 4) {
       try {
         await invoke('toggle_fan_isolated_output', {
           enable: nextVal,
@@ -1017,18 +931,7 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
           />
 
           {/* Column 3: Fan Controls & Curves */}
-          {modelCaps?.fan_custom_curve === false ? (
-            <BldFanStrategyPanel
-              cpuFanRpm={status.cpu_fan_rpm}
-              gpuFanRpm={status.gpu_fan_rpm}
-              cpuTemp={status.cpu_temp}
-              gpuTemp={status.gpu_temp}
-              fanBoost={status.fan_boost}
-              maxRpm={modelCaps?.max_fan_rpm}
-              fanBoostMode={modelCaps?.fan_boost_mode}
-              onToggleFanBoost={onToggleFanBoost || (() => invoke('set_fan_boost', { enable: !status.fan_boost }))}
-            />
-          ) : (
+          {(
             <FanCurveEditor
               fanCurveTab={fanCurveTab}
               onTabChange={setFanCurveTab}
@@ -1043,13 +946,8 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
               onChangeFanRampSpeed={handleFanRampSpeedChange}
               fanCurveLinked={profile.fan_curve_linked}
               onToggleFanCurveLinked={handleToggleFanCurveLinked}
-              fanBoost={status.fan_boost}
-              onToggleFanBoost={onToggleFanBoost || (() => invoke('set_fan_boost', { enable: !status.fan_boost }))}
-              fanBoostMode={modelCaps?.fan_boost_mode}
-              maxRpm={modelCaps?.max_fan_rpm}
               fanIndependentChannels={modelCaps?.fan_independent_channels ?? true}
               supportFanRampRate={modelCaps?.fan_ramp_rate ?? (capabilities?.fan_ramp_rate ?? true)}
-              minDuty={modelCaps?.fan_boost_mode === 'direct_rpm_clamp' ? 22 : 0}
             />
           )}
         </div>

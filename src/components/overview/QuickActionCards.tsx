@@ -16,7 +16,7 @@ import { ModelCapabilities } from '../../plugins/plugin_manifest';
 interface QuickActionCardsProps {
   status: HardwareState;
   capabilities?: ModelCapabilities;
-  onToggleFanBoost: (targetRpm?: number) => void;
+  onToggleFanBoost: () => void;
   onToggleBatteryLimit?: () => void;
   onSwitchRefreshRate: (hz: number, invokeBackend?: boolean) => void;
   checkOemGuard: (action: () => void) => void;
@@ -24,55 +24,11 @@ interface QuickActionCardsProps {
 
 export const QuickActionCards: React.FC<QuickActionCardsProps> = ({
   status,
-  capabilities,
   onToggleFanBoost,
   onSwitchRefreshRate,
   checkOemGuard,
 }) => {
   const [autoMinRefresh, setAutoMinRefresh] = useState(status.auto_min_refresh_on_battery ?? false);
-  const [bldRpm, setBldRpm] = useState<number>(() => {
-    const saved = localStorage.getItem('openrevo_bld_target_rpm');
-    if (saved) {
-      const parsed = Number(saved);
-      if (!isNaN(parsed) && parsed >= 2200 && parsed <= 5800) {
-        return parsed;
-      }
-    }
-    return 5800;
-  });
-  const bldDebounceRef = React.useRef<any>(null);
-
-  const isBldFanLock = useMemo(() => {
-    return capabilities?.fan_boost_mode === 'direct_rpm_clamp';
-  }, [capabilities?.fan_boost_mode]);
-
-  const handleBldSwitchToggle = () => {
-    checkOemGuard(() => {
-      onToggleFanBoost(bldRpm);
-    });
-  };
-
-  const handleBldRpmChange = (newVal: number) => {
-    setBldRpm(newVal);
-    localStorage.setItem('openrevo_bld_target_rpm', String(newVal));
-    if (status.fan_boost) {
-      if (bldDebounceRef.current) clearTimeout(bldDebounceRef.current);
-      bldDebounceRef.current = setTimeout(async () => {
-        try {
-          await invoke('set_bld_fan_speed_cap', { rpm: newVal });
-        } catch (err) {
-          console.warn('BLD debounce set fan speed failed:', err);
-        }
-      }, 150);
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      if (bldDebounceRef.current) clearTimeout(bldDebounceRef.current);
-    };
-  }, []);
-
   useEffect(() => {
     if (typeof status.auto_min_refresh_on_battery === 'boolean') {
       setAutoMinRefresh(status.auto_min_refresh_on_battery);
@@ -139,45 +95,8 @@ export const QuickActionCards: React.FC<QuickActionCardsProps> = ({
 
   return (
     <div style={{ display: 'flex', gap: '12px', alignItems: 'stretch', position: 'relative', zIndex: showMonMenu ? 200 : 1 }}>
-      {/* 1. 一键强冷 (同方物理开关 / 宝龙达转速温度锁定滑块) */}
+      {/* 1. 一键强冷 */}
       {status.support_flags?.has_fan_boost !== false && (
-        isBldFanLock ? (
-          <div
-            className="glass-card bld-fan-card"
-            title="宝龙达模具风扇锁定：可在 0~5800 RPM 之间自由设定目标转速，开启后锁定转速，关闭后恢复 BIOS 自动温控"
-          >
-            <div className="bld-fan-header">
-              <div className="bld-fan-title-group">
-                <Fan className={`w-3.5 h-3.5 flex-shrink-0 ${status.fan_boost ? 'text-cyan-400 animate-spin' : 'text-cyan-400'}`} />
-                <span className="bld-fan-title">强冷锁速</span>
-                <span className={`bld-fan-rpm-badge ${status.fan_boost ? '' : 'inactive'}`}>
-                  {bldRpm} RPM
-                </span>
-              </div>
-              <button
-                onClick={handleBldSwitchToggle}
-                className={`bld-fan-switch ${status.fan_boost ? 'active' : ''}`}
-                title={status.fan_boost ? '点击关闭转速锁定，恢复原厂自动温控' : '点击开启风扇锁定'}
-              >
-                {status.fan_boost ? '已锁定' : '自动'}
-              </button>
-            </div>
-            <div className="bld-fan-slider-row">
-              <span className="bld-fan-limit-hint">2200</span>
-              <input
-                type="range"
-                min="2200"
-                max="5800"
-                step="100"
-                value={bldRpm}
-                onChange={(e) => handleBldRpmChange(Number(e.target.value))}
-                className="bld-fan-range"
-                title={`目标转速: ${bldRpm} RPM`}
-              />
-              <span className="bld-fan-limit-hint">5800</span>
-            </div>
-          </div>
-        ) : (
           <div
             className="glass-card"
             style={{
@@ -202,7 +121,6 @@ export const QuickActionCards: React.FC<QuickActionCardsProps> = ({
               {status.fan_boost ? '已开启' : '关闭'}
             </button>
           </div>
-        )
       )}
 
       {/* 2. 拔电自动低刷 */}

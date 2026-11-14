@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Wind, Link2, Link2Off, Plus, Minus, Fan } from 'lucide-react';
+import { Wind, Link2, Link2Off, Plus, Minus } from 'lucide-react';
 import { FanCurvePoint } from '../../types/hardware';
 import { RevSwitch } from '../ui/RevSwitch';
 
@@ -17,10 +17,6 @@ export interface FanCurveEditorProps {
   onChangeFanRampSpeed: (speedMs: number) => void;
   fanCurveLinked?: boolean;
   onToggleFanCurveLinked?: (linked: boolean) => void;
-  fanBoost?: boolean;
-  onToggleFanBoost?: () => void;
-  fanBoostMode?: string;
-  maxRpm?: number;
   fanIndependentChannels?: boolean;
   supportFanRampRate?: boolean;
   minDuty?: number;
@@ -40,15 +36,11 @@ export const FanCurveEditor: React.FC<FanCurveEditorProps> = ({
   onChangeFanRampSpeed,
   fanCurveLinked = false,
   onToggleFanCurveLinked,
-  fanBoost = false,
-  onToggleFanBoost,
-  fanBoostMode,
-  maxRpm = 5800,
   fanIndependentChannels = true,
   supportFanRampRate = true,
   minDuty: propMinDuty,
 }) => {
-  const minDuty = propMinDuty ?? (fanBoostMode === 'direct_rpm_clamp' ? 22 : 0);
+  const minDuty = propMinDuty ?? 0;
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const repeatTimerRef = useRef<{ timeout?: any; interval?: any }>({});
@@ -180,34 +172,6 @@ export const FanCurveEditor: React.FC<FanCurveEditorProps> = ({
           <span>风扇策略与曲线</span>
         </div>
       </div>
-
-      {/* Single-row Physical Fan Boost Switch for BLD Direct Clamp only */}
-      {fanBoostMode === 'direct_rpm_clamp' && onToggleFanBoost && (
-        <div
-          className="tuning-sub-card"
-          style={{
-            flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            padding: '6px 10px',
-            background: fanBoost ? 'var(--status-info-dim)' : undefined,
-            border: fanBoost ? '1px solid var(--status-info)' : undefined,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Fan className={`w-3.5 h-3.5 ${fanBoost ? 'animate-spin' : ''}`} style={{ color: fanBoost ? 'var(--status-info)' : 'var(--text-muted)' }} />
-            <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '11px', whiteSpace: 'nowrap' }}>
-              硬件物理强锁 ({maxRpm} RPM)
-            </span>
-          </div>
-          <RevSwitch
-            checked={fanBoost}
-            onChange={() => onToggleFanBoost()}
-            size="sm"
-            activeColor="var(--status-info)"
-          />
-        </div>
-      )}
 
       {/* Fan Ramp Rate (EC hardware slope ramp, Tongfang only) */}
       {supportFanRampRate && (

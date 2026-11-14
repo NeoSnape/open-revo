@@ -37,8 +37,6 @@ export interface SystemSettingsViewProps {
   moduleToggles?: Record<string, boolean>;
   onToggleModule?: (id: string, enabled: boolean) => void;
   capabilities?: ModelCapabilities;
-  previewMode?: 'real' | 'thin_light' | 'gaming';
-  onPreviewFormFactor?: (mode: 'real' | 'thin_light' | 'gaming') => void;
 }
 
 export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
@@ -50,9 +48,6 @@ export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
   onToggleWaterCooler: _onToggleWaterCooler,
   moduleToggles: _moduleToggles,
   onToggleModule: _onToggleModule,
-  capabilities,
-  previewMode = 'real',
-  onPreviewFormFactor,
 }) => {
 
   const [logStatus, setLogStatus] = useState<{
@@ -769,57 +764,6 @@ export const SystemSettingsView: React.FC<SystemSettingsViewProps> = ({
           )}
 
 
-
-          {/* 只有在 --debug 模式下才显示的开发者形态预览卡片 */}
-          {capabilities?.is_debug_mode && onPreviewFormFactor && (
-            <div className="sys-card sys-card--highlight">
-              <div className="sys-card-header">
-                <div className="sys-card-title">
-                  <Sliders className="sys-card-icon" />
-                  <span>机型形态与能力实时预览 (Dev Mode)</span>
-                </div>
-                <RevBadge color="amber">--debug 专属</RevBadge>
-              </div>
-              <div className="sys-card-desc">
-                允许开发者在不修改底层通信的前提下，纯前端模拟不同模具插槽裁切效果（如轻薄本隐藏独显/水冷）。
-              </div>
-
-              <div className="sys-rows">
-                <div className="quick-row">
-                  <div className="sys-row-label">
-                    <span>当前模拟形态</span>
-                    <span className="sys-row-desc">
-                      {previewMode === 'real'
-                        ? `真实硬件: ${capabilities.name || '自适应'} (${capabilities.form_factor || 'gaming'})`
-                        : previewMode === 'thin_light'
-                          ? '模拟: 星耀 14 轻薄本 (核显 + 无水冷 + 单色背光)'
-                          : '模拟: 标准全能游戏本 (独显直连 + 水冷 + 全功能)'}
-                    </span>
-                  </div>
-                  <div className="sys-row-controls">
-                    <button
-                      className={`toggle-btn ${previewMode === 'real' ? 'active-emerald' : ''}`}
-                      onClick={() => onPreviewFormFactor('real')}
-                    >
-                      真实本机
-                    </button>
-                    <button
-                      className={`toggle-btn ${previewMode === 'thin_light' ? 'active-cyan' : ''}`}
-                      onClick={() => onPreviewFormFactor('thin_light')}
-                    >
-                      星耀 14 轻薄本
-                    </button>
-                    <button
-                      className={`toggle-btn ${previewMode === 'gaming' ? 'active-indigo' : ''}`}
-                      onClick={() => onPreviewFormFactor('gaming')}
-                    >
-                      游戏本形态
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
         </div>
       </div>

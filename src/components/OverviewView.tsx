@@ -16,7 +16,7 @@ export interface OverviewViewProps {
   capabilities?: ModelCapabilities;
   onUpdateOsdConfig: (cfg: OsdConfig) => void;
   onSetPowerMode: (mode: PowerMode) => void;
-  onToggleFanBoost: (targetRpm?: number) => void;
+  onToggleFanBoost: () => void;
   onToggleBatteryLimit: () => void;
   onSwitchRefreshRate: (hz: number, invokeBackend?: boolean) => void;
   onOpenCustomTuning: () => void;

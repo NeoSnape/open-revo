@@ -12,5 +12,4 @@ pub mod nvapi;
 pub mod nvml;
 pub mod hid_ffi;
 pub mod wmi_mulong;
-pub mod bld_driver_mgr;
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { HardwareState, PowerMode, POWER_MODES } from '../types/hardware';
 import { OverviewView } from './OverviewView';
@@ -30,7 +30,7 @@ interface FullDashboardProps {
   theme?: 'mono' | 'cyber';
   onToggleTheme?: () => void;
   onSetPowerMode: (mode: PowerMode) => void;
-  onToggleFanBoost: (targetRpm?: number) => void;
+  onToggleFanBoost: () => void;
   onToggleBatteryLimit: () => void;
   onSwitchRefreshRate: (hz: number, invokeBackend?: boolean) => void;
   onToggleWinKey: () => void;
@@ -42,8 +42,6 @@ interface FullDashboardProps {
   initialTab?: TabId;
   initialOpenCustomTuning?: boolean;
   capabilities?: ModelCapabilities;
-  previewMode?: 'real' | 'thin_light' | 'gaming';
-  onPreviewFormFactor?: (mode: 'real' | 'thin_light' | 'gaming') => void;
 }
 
 import { invoke } from '@tauri-apps/api/core';
@@ -65,8 +63,6 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
   initialTab,
   initialOpenCustomTuning = false,
   capabilities: propCapabilities,
-  previewMode: propPreviewMode,
-  onPreviewFormFactor: propOnPreviewFormFactor,
 }) => {
   const [activeTab, setActiveTab] = useState<TabId>(initialTab || 'overview');
   const [isCustomTuningOpen, setIsCustomTuningOpen] = useState(initialOpenCustomTuning);
@@ -121,68 +117,21 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
   const [moduleToggles, setModuleToggles] = useState<Record<string, boolean>>({});
 
   // Model Capabilities (Declarative Hardware Driver Contract)
-  const realCapabilitiesRef = useRef<ModelCapabilities | undefined>(undefined);
   const [internalCapabilities, setInternalCapabilities] = useState<ModelCapabilities | undefined>(undefined);
-  const [internalPreviewMode, setInternalPreviewMode] = useState<'real' | 'thin_light' | 'gaming'>('real');
 
   const capabilities = propCapabilities !== undefined ? propCapabilities : internalCapabilities;
-  const previewMode = propPreviewMode !== undefined ? propPreviewMode : internalPreviewMode;
 
   useEffect(() => {
     if (propCapabilities === undefined) {
       invoke<ModelCapabilities>('get_model_capabilities')
         .then((caps) => {
           if (caps) {
-            realCapabilitiesRef.current = caps;
             setInternalCapabilities(caps);
           }
         })
         .catch((err) => console.warn('Failed to load model capabilities:', err));
     }
   }, [propCapabilities]);
-
-  const handlePreviewFormFactor = useCallback((mode: 'real' | 'thin_light' | 'gaming') => {
-    if (propOnPreviewFormFactor) {
-      propOnPreviewFormFactor(mode);
-      return;
-    }
-    setInternalPreviewMode(mode);
-    if (mode === 'real') {
-      if (realCapabilitiesRef.current) {
-        setInternalCapabilities({ ...realCapabilitiesRef.current });
-      }
-    } else if (mode === 'thin_light') {
-      setInternalCapabilities({
-        ...(realCapabilitiesRef.current || {}),
-        id: 'preview_xingyao_14',
-        name: 'MECHREVO Xingyao 14 (UI Preview)',
-        form_factor: 'thin_light',
-        ui_preset: 'ultrabook_compact',
-        discrete_gpu: false,
-        water_cooling: false,
-        fan_custom_curve: false,
-        battery_charge_limit: true,
-        power_modes: ['office', 'balance', 'turbo'],
-        rgb_keyboard: { supported: true, type: 'monochrome_stepped', steps: [0, 1, 2, 3, 4] },
-        is_debug_mode: true,
-      });
-    } else if (mode === 'gaming') {
-      setInternalCapabilities({
-        ...(realCapabilitiesRef.current || {}),
-        id: 'preview_gaming',
-        name: 'MECHREVO Gaming Laptop (UI Preview)',
-        form_factor: 'gaming',
-        ui_preset: 'gaming_full',
-        discrete_gpu: true,
-        water_cooling: true,
-        fan_custom_curve: true,
-        battery_charge_limit: true,
-        power_modes: ['office', 'balance', 'turbo', 'custom'],
-        rgb_keyboard: { supported: true, type: 'per_key_rgb' },
-        is_debug_mode: true,
-      });
-    }
-  }, [propOnPreviewFormFactor]);
 
   // On non-dGPU machines, GPU tab remains accessible for display brightness & color tuning controls
 
@@ -592,8 +541,6 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
               moduleToggles={moduleToggles}
               onToggleModule={handleToggleModule}
               capabilities={capabilities}
-              previewMode={previewMode}
-              onPreviewFormFactor={handlePreviewFormFactor}
             />
           </ModuleErrorBoundary>
         )}
@@ -605,7 +552,6 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
         <CustomTuningPanel
           status={status}
           capabilities={capabilities}
-          onToggleFanBoost={onToggleFanBoost}
           onClose={() => {
             setIsCustomTuningOpen(false);
             setProfileVersion((v) => v + 1);
