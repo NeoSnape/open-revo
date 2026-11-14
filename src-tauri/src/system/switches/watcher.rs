@@ -64,6 +64,7 @@ pub fn start_hardware_state_watcher(
         let mut last_fn_toggle_time = std::time::Instant::now() - std::time::Duration::from_secs(10);
         let mut custom_trace_ticks: u32 = 0;
         let mut last_was_throttled = false;
+        let mut last_custom_trace: Option<(u8, u8, u8, u8, u8, u8)> = None;
         let mut tick_count: u32 = 0;
         let mut last_color_profiles: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
 
@@ -102,9 +103,7 @@ pub fn start_hardware_state_watcher(
                     last_win_lock = Some(current_win);
                     last_win_toggle_time = std::time::Instant::now();
                     crate::system::hooks::set_win_key_locked(current_win);
-                    let mut cfg = crate::system::config::load_config();
-                    cfg.win_key_locked = current_win;
-                    crate::system::config::save_config(&cfg);
+                    crate::system::config::modify_config(|c| c.win_key_locked = current_win);
                     use tauri::Emitter;
                     crate::system::osd_window::wake_osd_if_enabled(&app);
                     let _ = app.emit("win-lock-state-changed", current_win);
@@ -124,9 +123,7 @@ pub fn start_hardware_state_watcher(
                             crate::log_info!("DEVICE_SWITCH", "External Fn Lock state change: {:?} -> {}", last_fn_lock, current_fn);
                             last_fn_lock = Some(current_fn);
                             last_fn_toggle_time = std::time::Instant::now();
-                            let mut cfg = crate::system::config::load_config();
-                            cfg.fn_lock_enabled = current_fn;
-                            crate::system::config::save_config(&cfg);
+                            crate::system::config::modify_config(|c| c.fn_lock_enabled = current_fn);
                             use tauri::Emitter;
                             crate::system::osd_window::wake_osd_if_enabled(&app);
                             let _ = app.emit("fn-lock-state-changed", current_fn);
@@ -189,9 +186,7 @@ pub fn start_hardware_state_watcher(
                     if last_bt != Some(current_bt) {
                         crate::log_info!("DEVICE_SWITCH", "External Bluetooth state change: {:?} -> {}", last_bt, current_bt);
                         last_bt = Some(current_bt);
-                        let mut cfg = crate::system::config::load_config();
-                        cfg.bluetooth_enabled = current_bt;
-                        crate::system::config::save_config(&cfg);
+                        crate::system::config::modify_config(|c| c.bluetooth_enabled = current_bt);
                         use tauri::Emitter;
                         crate::system::osd_window::wake_osd_if_enabled(&app);
                         let _ = app.emit("bluetooth-state-changed", current_bt);
@@ -205,9 +200,7 @@ pub fn start_hardware_state_watcher(
                     if last_wifi != Some(current_wifi) {
                         crate::log_info!("DEVICE_SWITCH", "External Wi-Fi state change: {:?} -> {}", last_wifi, current_wifi);
                         last_wifi = Some(current_wifi);
-                        let mut cfg = crate::system::config::load_config();
-                        cfg.wifi_enabled = current_wifi;
-                        crate::system::config::save_config(&cfg);
+                        crate::system::config::modify_config(|c| c.wifi_enabled = current_wifi);
                         use tauri::Emitter;
                         crate::system::osd_window::wake_osd_if_enabled(&app);
                         let _ = app.emit("wifi-state-changed", current_wifi);
@@ -221,9 +214,7 @@ pub fn start_hardware_state_watcher(
                 if last_cam != Some(current_cam) {
                     crate::log_info!("DEVICE_SWITCH", "External Camera state change: {:?} -> {}", last_cam, current_cam);
                     last_cam = Some(current_cam);
-                    let mut cfg = crate::system::config::load_config();
-                    cfg.camera_enabled = current_cam;
-                    crate::system::config::save_config(&cfg);
+                    crate::system::config::modify_config(|c| c.camera_enabled = current_cam);
                     use tauri::Emitter;
                     crate::system::osd_window::wake_osd_if_enabled(&app);
                     let _ = app.emit("camera-state-changed", current_cam);
@@ -236,9 +227,7 @@ pub fn start_hardware_state_watcher(
                     if last_mic != Some(current_mic) {
                         crate::log_info!("DEVICE_SWITCH", "External Microphone state change: {:?} -> {}", last_mic, current_mic);
                         last_mic = Some(current_mic);
-                        let mut cfg = crate::system::config::load_config();
-                        cfg.mic_enabled = current_mic;
-                        crate::system::config::save_config(&cfg);
+                        crate::system::config::modify_config(|c| c.mic_enabled = current_mic);
                         use tauri::Emitter;
                         crate::system::osd_window::wake_osd_if_enabled(&app);
                         let _ = app.emit("mic-state-changed", current_mic);
@@ -379,9 +368,7 @@ pub fn start_hardware_state_watcher(
                                 if target_mon.current_hz != min_rate {
                                     crate::log_info!("POWER_WATCHER", "AC unplugged: auto-switching internal screen ({}) refresh rate {}Hz -> {}Hz", target_mon.friendly_name, target_mon.current_hz, min_rate);
                                     let _ = crate::system::display::set_monitor_refresh_rate(&target_mon.device_name, min_rate);
-                                    let mut updated_cfg = crate::system::config::load_config();
-                                    updated_cfg.refresh_rate = min_rate;
-                                    crate::system::config::save_config(&updated_cfg);
+                                    crate::system::config::modify_config(|c| c.refresh_rate = min_rate);
                                     use tauri::Emitter;
                                     let _ = app.emit("refresh-rate-changed", min_rate);
                                 }
@@ -430,9 +417,7 @@ pub fn start_hardware_state_watcher(
                                 if target_mon.current_hz != max_rate {
                                     crate::log_info!("POWER_WATCHER", "AC plugged in: restoring high refresh rate ({}) {}Hz -> {}Hz", target_mon.friendly_name, target_mon.current_hz, max_rate);
                                     let _ = crate::system::display::set_monitor_refresh_rate(&target_mon.device_name, max_rate);
-                                    let mut updated_cfg = crate::system::config::load_config();
-                                    updated_cfg.refresh_rate = max_rate;
-                                    crate::system::config::save_config(&updated_cfg);
+                                    crate::system::config::modify_config(|c| c.refresh_rate = max_rate);
                                     use tauri::Emitter;
                                     let _ = app.emit("refresh-rate-changed", max_rate);
                                 }
@@ -483,7 +468,13 @@ pub fn start_hardware_state_watcher(
             last_ac_line = Some(is_ac);
 
             // 8. Custom Mode (Mode 4) Live Telemetry & Throttle Diagnostics (Gaming Laptops Only)
-            let cur_mode = crate::system::config::load_config().power_mode;
+            // The mode the EC is actually in, not the saved one: while the screen is blanked the
+            // machine sits in Office mode with Custom still in the config, and the self-heal below
+            // must never write Custom-mode registers then.
+            let cur_mode = ec_bridge.lock().get_power_mode();
+            if cur_mode != 4 {
+                last_custom_trace = None;
+            }
             if !is_ultrabook && cur_mode == 4 && supports_legacy_ec_switches {
                 custom_trace_ticks = custom_trace_ticks.wrapping_add(1);
                 if let Some((curr_mhz, max_mhz, limit_mhz)) = crate::system::power_mode::get_cpu_frequency_info() {
@@ -517,19 +508,24 @@ pub fn start_hardware_state_watcher(
                     } else {
                         last_was_throttled = false;
                         if custom_trace_ticks % 8 == 0 {
-                            // Periodic live status every ~4 seconds
+                            // Checked every ~4 seconds, logged only when a value changes (this line
+                            // used to be 85 % of the log file).
                             let raw_pl1 = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_PL1).unwrap_or(0);
                             let raw_pl2 = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_PL2).unwrap_or(0);
                             let raw_pl4 = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_PL4).unwrap_or(0);
                             let raw_tcc = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_TCC).unwrap_or(0);
                             let raw_db_watts = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_GPU_DB_MAX).unwrap_or(0);
                             let raw_power_status = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_POWER_STATUS).unwrap_or(0);
-                            crate::log_info!(
-                                "CUSTOM_TRACE",
-                                "Custom Mode Runtime: CPU Freq={}MHz (Max={}MHz), PL1={}W, PL2={}W, PL4={}W, Tcc=0x{:02X}, DB={}W, Power=0x{:02X} (DC_Online={})",
-                                curr_mhz, max_mhz,
-                                raw_pl1, raw_pl2, raw_pl4, raw_tcc, raw_db_watts, raw_power_status, is_dc
-                            );
+                            let snapshot = (raw_pl1, raw_pl2, raw_pl4, raw_tcc, raw_db_watts, raw_power_status);
+                            if last_custom_trace != Some(snapshot) {
+                                last_custom_trace = Some(snapshot);
+                                crate::log_info!(
+                                    "CUSTOM_TRACE",
+                                    "Custom Mode Runtime: CPU Freq={}MHz (Max={}MHz), PL1={}W, PL2={}W, PL4={}W, Tcc=0x{:02X}, DB={}W, Power=0x{:02X} (DC_Online={})",
+                                    curr_mhz, max_mhz,
+                                    raw_pl1, raw_pl2, raw_pl4, raw_tcc, raw_db_watts, raw_power_status, is_dc
+                                );
+                            }
                         }
                     }
                 }

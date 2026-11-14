@@ -10,10 +10,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_CONTROL, VK_LWIN, VK_MENU, VK_NUMLOCK, VK_RWIN, VK_SCROLL, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW,
+    CallNextHookEx, DispatchMessageW, GetMessageW, SetTimer, SetWindowsHookExW,
     TranslateMessage, UnhookWindowsHookEx, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN,
-    WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
 };
+
+/// How often the keyboard hook is re-installed (see `ensure_hook_running`).
+const HOOK_REFRESH_MS: u32 = 3 * 60 * 1000;
 
 extern "system" {
     fn GetCurrentThreadId() -> u32;
@@ -40,9 +43,6 @@ static CAPS_PHYSICALLY_DOWN: AtomicBool = AtomicBool::new(false);
 static NUM_PHYSICALLY_DOWN: AtomicBool = AtomicBool::new(false);
 static SCROLL_PHYSICALLY_DOWN: AtomicBool = AtomicBool::new(false);
 
-static LAST_CAPS_PRESS: Mutex<Option<Instant>> = Mutex::new(None);
-static LAST_NUM_PRESS: Mutex<Option<Instant>> = Mutex::new(None);
-static LAST_SCROLL_PRESS: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Query true live lock key toggle state safely without AttachThreadInput deadlocks
 unsafe fn query_hardware_lock_state(vk: u16) -> bool {
@@ -114,116 +114,21 @@ unsafe extern "system" fn low_level_keyboard_proc(
         }
 
         // 2. Lock Keys Notification (Caps Lock, Num Lock, Scroll Lock)
-        // Trigger on initial WM_KEYDOWN only; reject typematic auto-repeat while physically held
+        // Only the first key-down is handed to the worker thread; typematic repeats are dropped here.
+        // Nothing slow may run inside this callback (see `lock_key_worker`).
         if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
-            if let Some(app) = APP_HANDLE.get() {
-                if vk == VK_CAPITAL.0 {
-                    let was_down = CAPS_PHYSICALLY_DOWN.swap(true, Ordering::SeqCst);
-                    if !was_down {
-                        let mut last = LAST_CAPS_PRESS.lock();
-                        let should_fire = match *last {
-                            Some(t) => t.elapsed() >= std::time::Duration::from_millis(60),
-                            None => true,
-                        };
-                        if should_fire {
-                            *last = Some(Instant::now());
-                            drop(last);
-
-                            // Invert state immediately for 0ms visual feedback
-                            let new_val = !CAPS_STATE.load(Ordering::Relaxed);
-                            CAPS_STATE.store(new_val, Ordering::Relaxed);
-                            crate::log_info!("HOOKS", "Caps Lock key-down: toggled to {}", new_val);
-                            crate::system::osd_window::wake_osd_if_enabled(app);
-                            let _ = app.emit("caps-lock-changed", new_val);
-                            let _ = app.emit_to("main", "caps-lock-changed", new_val);
-                            let _ = app.emit_to("osd", "caps-lock-changed", new_val);
-
-                            // 35ms asynchronous hardware verification against foreground thread
-                            let app_clone = app.clone();
-                            thread::spawn(move || {
-                                thread::sleep(std::time::Duration::from_millis(35));
-                                let hw_val = unsafe { query_hardware_lock_state(VK_CAPITAL.0) };
-                                if hw_val != CAPS_STATE.load(Ordering::Relaxed) {
-                                    CAPS_STATE.store(hw_val, Ordering::Relaxed);
-                                    crate::log_info!("HOOKS", "Caps Lock hardware sync corrected to: {}", hw_val);
-                                    crate::system::osd_window::wake_osd_if_enabled(&app_clone);
-                                    let _ = app_clone.emit("caps-lock-changed", hw_val);
-                                    let _ = app_clone.emit_to("main", "caps-lock-changed", hw_val);
-                                    let _ = app_clone.emit_to("osd", "caps-lock-changed", hw_val);
-                                }
-                            });
-                        }
-                    }
-                } else if vk == VK_NUMLOCK.0 {
-                    let was_down = NUM_PHYSICALLY_DOWN.swap(true, Ordering::SeqCst);
-                    if !was_down {
-                        let mut last = LAST_NUM_PRESS.lock();
-                        let should_fire = match *last {
-                            Some(t) => t.elapsed() >= std::time::Duration::from_millis(60),
-                            None => true,
-                        };
-                        if should_fire {
-                            *last = Some(Instant::now());
-                            drop(last);
-
-                            let new_val = !NUM_STATE.load(Ordering::Relaxed);
-                            NUM_STATE.store(new_val, Ordering::Relaxed);
-                            crate::log_info!("HOOKS", "Num Lock key-down: toggled to {}", new_val);
-                            crate::system::osd_window::wake_osd_if_enabled(app);
-                            let _ = app.emit("num-lock-changed", new_val);
-                            let _ = app.emit_to("main", "num-lock-changed", new_val);
-                            let _ = app.emit_to("osd", "num-lock-changed", new_val);
-
-                            let app_clone = app.clone();
-                            thread::spawn(move || {
-                                thread::sleep(std::time::Duration::from_millis(35));
-                                let hw_val = unsafe { query_hardware_lock_state(VK_NUMLOCK.0) };
-                                if hw_val != NUM_STATE.load(Ordering::Relaxed) {
-                                    NUM_STATE.store(hw_val, Ordering::Relaxed);
-                                    crate::log_info!("HOOKS", "Num Lock hardware sync corrected to: {}", hw_val);
-                                    crate::system::osd_window::wake_osd_if_enabled(&app_clone);
-                                    let _ = app_clone.emit("num-lock-changed", hw_val);
-                                    let _ = app_clone.emit_to("main", "num-lock-changed", hw_val);
-                                    let _ = app_clone.emit_to("osd", "num-lock-changed", hw_val);
-                                }
-                            });
-                        }
-                    }
-                } else if vk == VK_SCROLL.0 {
-                    let was_down = SCROLL_PHYSICALLY_DOWN.swap(true, Ordering::SeqCst);
-                    if !was_down {
-                        let mut last = LAST_SCROLL_PRESS.lock();
-                        let should_fire = match *last {
-                            Some(t) => t.elapsed() >= std::time::Duration::from_millis(60),
-                            None => true,
-                        };
-                        if should_fire {
-                            *last = Some(Instant::now());
-                            drop(last);
-
-                            let new_val = !SCROLL_STATE.load(Ordering::Relaxed);
-                            SCROLL_STATE.store(new_val, Ordering::Relaxed);
-                            crate::log_info!("HOOKS", "Scroll Lock key-down: toggled to {}", new_val);
-                            crate::system::osd_window::wake_osd_if_enabled(app);
-                            let _ = app.emit("scroll-lock-changed", new_val);
-                            let _ = app.emit_to("main", "scroll-lock-changed", new_val);
-                            let _ = app.emit_to("osd", "scroll-lock-changed", new_val);
-
-                            let app_clone = app.clone();
-                            thread::spawn(move || {
-                                thread::sleep(std::time::Duration::from_millis(35));
-                                let hw_val = unsafe { query_hardware_lock_state(VK_SCROLL.0) };
-                                if hw_val != SCROLL_STATE.load(Ordering::Relaxed) {
-                                    SCROLL_STATE.store(hw_val, Ordering::Relaxed);
-                                    crate::log_info!("HOOKS", "Scroll Lock hardware sync corrected to: {}", hw_val);
-                                    crate::system::osd_window::wake_osd_if_enabled(&app_clone);
-                                    let _ = app_clone.emit("scroll-lock-changed", hw_val);
-                                    let _ = app_clone.emit_to("main", "scroll-lock-changed", hw_val);
-                                    let _ = app_clone.emit_to("osd", "scroll-lock-changed", hw_val);
-                                }
-                            });
-                        }
-                    }
+            let first_down = if vk == VK_CAPITAL.0 {
+                !CAPS_PHYSICALLY_DOWN.swap(true, Ordering::SeqCst)
+            } else if vk == VK_NUMLOCK.0 {
+                !NUM_PHYSICALLY_DOWN.swap(true, Ordering::SeqCst)
+            } else if vk == VK_SCROLL.0 {
+                !SCROLL_PHYSICALLY_DOWN.swap(true, Ordering::SeqCst)
+            } else {
+                false
+            };
+            if first_down {
+                if let Some(tx) = LOCK_KEY_TX.get() {
+                    let _ = tx.lock().send(vk);
                 }
             }
         } else if msg == WM_KEYUP || msg == WM_SYSKEYUP {
@@ -237,6 +142,52 @@ unsafe extern "system" fn low_level_keyboard_proc(
         }
     }
     CallNextHookEx(None, n_code, w_param, l_param)
+}
+
+/// Lock-key presses queued by the hook callback for `lock_key_worker`.
+static LOCK_KEY_TX: OnceLock<Mutex<std::sync::mpsc::Sender<u16>>> = OnceLock::new();
+
+/// Announces Caps / Num / Scroll Lock changes (log line, panel + OSD events), off the hook thread.
+/// This used to run inside the hook callback: emitting to the webviews can wait on the main thread,
+/// and Windows silently removes a low-level hook whose callback is slow (in the 2026-11-09..11 log
+/// every screen wake came from the fallback key poll, i.e. the hook was already gone).
+fn lock_key_worker(app: AppHandle, rx: std::sync::mpsc::Receiver<u16>) {
+    let mut last_press: [Option<Instant>; 3] = [None; 3];
+    while let Ok(vk) = rx.recv() {
+        let (slot, state, name, event): (usize, &'static AtomicBool, &str, &str) = if vk == VK_CAPITAL.0 {
+            (0, &CAPS_STATE, "Caps Lock", "caps-lock-changed")
+        } else if vk == VK_NUMLOCK.0 {
+            (1, &NUM_STATE, "Num Lock", "num-lock-changed")
+        } else if vk == VK_SCROLL.0 {
+            (2, &SCROLL_STATE, "Scroll Lock", "scroll-lock-changed")
+        } else {
+            continue;
+        };
+        if last_press[slot].map_or(false, |t| t.elapsed() < std::time::Duration::from_millis(60)) {
+            continue;
+        }
+        last_press[slot] = Some(Instant::now());
+
+        let announce = |val: bool| {
+            crate::system::osd_window::wake_osd_if_enabled(&app);
+            let _ = app.emit(event, val);
+            let _ = app.emit_to("main", event, val);
+            let _ = app.emit_to("osd", event, val);
+        };
+        // Invert immediately for instant visual feedback, then verify against the real key state.
+        let new_val = !state.load(Ordering::Relaxed);
+        state.store(new_val, Ordering::Relaxed);
+        crate::log_info!("HOOKS", "{} key-down: toggled to {}", name, new_val);
+        announce(new_val);
+
+        thread::sleep(std::time::Duration::from_millis(35));
+        let hw_val = unsafe { query_hardware_lock_state(vk) };
+        if hw_val != state.load(Ordering::Relaxed) {
+            state.store(hw_val, Ordering::Relaxed);
+            crate::log_info!("HOOKS", "{} hardware sync corrected to: {}", name, hw_val);
+            announce(hw_val);
+        }
+    }
 }
 
 pub fn is_win_key_locked() -> bool {
@@ -266,6 +217,14 @@ pub fn init_hooks(app: &AppHandle) {
         );
     }
 
+    let (tx, rx) = std::sync::mpsc::channel::<u16>();
+    if LOCK_KEY_TX.set(Mutex::new(tx)).is_ok() {
+        let app_for_worker = app.clone();
+        let _ = thread::Builder::new()
+            .name("openrevo-lock-keys".into())
+            .spawn(move || lock_key_worker(app_for_worker, rx));
+    }
+
     crate::system::shortcuts::init_shortcuts();
 
     ensure_hook_running();
@@ -284,7 +243,7 @@ fn ensure_hook_running() {
             HOOK_THREAD_ID.store(tid, Ordering::SeqCst);
 
             let h_mod = GetModuleHandleW(std::ptr::null());
-            let hook = match SetWindowsHookExW(
+            let mut hook = match SetWindowsHookExW(
                 WH_KEYBOARD_LL,
                 Some(low_level_keyboard_proc),
                 h_mod,
@@ -301,10 +260,24 @@ fn ensure_hook_running() {
             crate::log_info!("HOOKS", "Low-level keyboard hook installed successfully (TID: {})", tid);
 
             // Win32 Message Pump for WH_KEYBOARD_LL
+            // Windows removes a low-level hook without any notification once its callback has been
+            // too slow (a busy machine is enough), and there is no way to ask whether it is still
+            // installed. Re-installing it every few minutes makes that self-healing.
+            let refresh_timer = SetTimer(None, 0, HOOK_REFRESH_MS, None);
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, HWND(std::ptr::null_mut()), 0, 0).as_bool() {
                 if msg.message == WM_QUIT {
                     break;
+                }
+                if msg.message == WM_TIMER && msg.hwnd.0.is_null() && msg.wParam.0 == refresh_timer {
+                    match SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), h_mod, 0) {
+                        Ok(fresh) => {
+                            let _ = UnhookWindowsHookEx(hook);
+                            hook = fresh;
+                        }
+                        Err(e) => crate::log_warn!("HOOKS", "Keyboard hook refresh failed: {:?}", e),
+                    }
+                    continue;
                 }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);

@@ -49,6 +49,31 @@ pub fn get_power_watcher_hwnd() -> Option<HWND> {
     }
 }
 
+/// Set between WM_QUERYENDSESSION and the end of the process (cleared if the shutdown is cancelled).
+static SESSION_ENDING: AtomicBool = AtomicBool::new(false);
+
+/// True while Windows is shutting down, restarting or signing the user out.
+pub fn is_session_ending() -> bool {
+    SESSION_ENDING.load(Ordering::SeqCst)
+}
+
+/// Hardware hand-back for a confirmed shutdown / restart / sign-out. Runs once; a second caller
+/// (the app's exit path) waits until the first one has finished.
+pub fn run_session_end_shutdown() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        crate::log_info!("POWER_EVENT", "System is shutting down or restarting: resetting display tuning, stopping lighting.");
+        crate::system::telemetry::set_screen_suspended(true);
+        crate::system::display_tuning::reset_display_tuning_to_default();
+        if !crate::hal::platform_probe::is_ultrabook() {
+            crate::driver::ite_streamer::get_global_streamer().suspend_for_sleep();
+            let lighting = crate::driver::ite_lighting::get_global_lighting();
+            lighting.turn_off_all();
+            lighting.invalidate_devices();
+        }
+    });
+}
+
 static PREV_POWER_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 fn handle_sleep_auto_office() {
@@ -230,17 +255,20 @@ unsafe extern "system" fn power_wnd_proc(
             }
             LRESULT(1)
         }
-        WM_QUERYENDSESSION | WM_ENDSESSION => {
-            crate::log_info!("POWER_EVENT", "System is shutting down or restarting! Stopping water cooler & lighting...");
-            crate::system::telemetry::set_screen_suspended(true);
-            crate::system::display_tuning::reset_display_tuning_to_default();
-            if !crate::hal::platform_probe::is_ultrabook() {
-                crate::driver::ite_streamer::get_global_streamer().suspend_for_sleep();
-                let lighting = crate::driver::ite_lighting::get_global_lighting();
-                lighting.turn_off_all();
-                lighting.invalidate_devices();
-            }
+        // Only a question at this point: another app (or the user) can still cancel the shutdown,
+        // so nothing is torn down here.
+        WM_QUERYENDSESSION => {
+            SESSION_ENDING.store(true, Ordering::SeqCst);
             LRESULT(1)
+        }
+        WM_ENDSESSION => {
+            if wparam.0 != 0 {
+                run_session_end_shutdown();
+            } else {
+                SESSION_ENDING.store(false, Ordering::SeqCst);
+                crate::log_info!("POWER_EVENT", "Shutdown / sign-out was cancelled; carrying on.");
+            }
+            LRESULT(0)
         }
         WM_DESTROY => {
             PostQuitMessage(0);

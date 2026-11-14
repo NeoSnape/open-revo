@@ -207,7 +207,21 @@ pub fn get_app_config() -> crate::system::config::AppConfig {
 
 #[tauri::command]
 pub fn save_app_config(cfg: crate::system::config::AppConfig) -> Result<(), String> {
-    crate::system::config::save_config(&cfg);
+    // The tuning panel sends back the whole config it loaded when it was opened. Storing that as-is
+    // rolled back everything changed since (power mode, active profile, switches...) and replaced the
+    // in-memory custom profile with the 75/75/125 W default (the profile is not part of the JSON),
+    // which the next Custom-mode apply would then have used. Only the tuning bounds are the panel's.
+    crate::system::config::modify_config(|cur| {
+        cur.gpu_offset_step = cfg.gpu_offset_step;
+        cur.gpu_core_offset_max = cfg.gpu_core_offset_max;
+        cur.gpu_mem_offset_max = cfg.gpu_mem_offset_max;
+        cur.cpu_temp_target_min = cfg.cpu_temp_target_min;
+        cur.cpu_temp_target_max = cfg.cpu_temp_target_max;
+        cur.cpu_pl4_margin = cfg.cpu_pl4_margin;
+        cur.cpu_pl1_max = cfg.cpu_pl1_max;
+        cur.cpu_pl2_max = cfg.cpu_pl2_max;
+        cur.cpu_pl4_max = cfg.cpu_pl4_max;
+    });
     Ok(())
 }
 

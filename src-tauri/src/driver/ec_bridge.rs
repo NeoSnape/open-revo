@@ -41,6 +41,26 @@ pub struct EcBridge {
     pub oem_conflict_detected: bool,
 }
 
+/// Store one tachometer reading. A stopped fan reads 0 (the GPU fan a constant 45); it used to be
+/// ignored, so the panel kept showing the last spin-down value (~500 rpm) for as long as the fan
+/// stood still. Two stopped readings in a row are required so a single glitched read does not
+/// flash 0 rpm.
+fn settle_fan_rpm(raw: u16, stopped_reads: &mut u8, slot: &mut u16) {
+    const STOPPED_BELOW_RPM: u16 = 100;
+    if raw >= 8000 {
+        return; // not a real reading
+    }
+    if raw < STOPPED_BELOW_RPM {
+        *stopped_reads = stopped_reads.saturating_add(1);
+        if *stopped_reads >= 2 {
+            *slot = 0;
+        }
+    } else {
+        *stopped_reads = 0;
+        *slot = raw;
+    }
+}
+
 impl EcBridge {
     pub fn new(conflict: bool) -> Self {
         let initial_cfg = crate::system::config::load_config();
@@ -86,6 +106,8 @@ impl EcBridge {
                 wmi_ec::ADDR_SECOND_FAN_RPM_B1,       // GPU Fan RPM High
                 wmi_ec::ADDR_SECOND_FAN_RPM_B2,       // GPU Fan RPM Low
             ];
+            let mut cpu_stopped_reads = 0u8;
+            let mut gpu_stopped_reads = 0u8;
 
             loop {
                 if !wmi_ec::is_acpi_driver_available() {
@@ -174,14 +196,10 @@ impl EcBridge {
 
                         // 4. Fan RPMs (Always update with real RPM readings)
                         let cpu_rpm = (cpu_rpm_high << 8) | cpu_rpm_low;
-                        if cpu_rpm > 0 && cpu_rpm < 8000 {
-                            c.cpu_fan_rpm = cpu_rpm;
-                        }
+                        settle_fan_rpm(cpu_rpm, &mut cpu_stopped_reads, &mut c.cpu_fan_rpm);
 
                         let gpu_rpm = (gpu_rpm_high << 8) | gpu_rpm_low;
-                        if gpu_rpm > 0 && gpu_rpm < 8000 {
-                            c.gpu_fan_rpm = gpu_rpm;
-                        }
+                        settle_fan_rpm(gpu_rpm, &mut gpu_stopped_reads, &mut c.gpu_fan_rpm);
 
                         // 5. Battery Gate Watchdog: Protect platform override from accidental drop (Tongfang platforms only)
                         if now >= c.battery_limit_cooldown_until {

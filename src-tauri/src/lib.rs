@@ -373,6 +373,15 @@ pub fn run() {
                 crate::system::webview_orchestrator::WebviewOrchestrator::global().safe_shutdown_all_subviews();
                 crate::system::tray::safe_hardware_shutdown_on_exit();
                 crate::system::rtss_osd::release_now();
+                // Windows shutdown / restart / sign-out: tao tears its event loop down on the first
+                // window's WM_ENDSESSION and panics ("cannot move state from Destroyed") when the
+                // next window (the OSD) gets the same message. Everything is handed back by now, so
+                // leave before that message arrives.
+                if crate::system::power_listener::is_session_ending() {
+                    crate::system::power_listener::run_session_end_shutdown();
+                    crate::log_info!("MAIN", "Session is ending; exiting cleanly.");
+                    std::process::exit(0);
+                }
             }
         });
 }
