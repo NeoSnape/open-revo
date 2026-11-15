@@ -218,18 +218,28 @@ pub fn start_status_logger(
                 std::thread::sleep(Duration::from_millis(2500));
             }
             let s = collect_hardware_state(&ec_bridge, &gpu_bridge, query_gpu);
+            // Why the GPU is holding back right now ("-" = it is not), so a log review can tell a
+            // thermal limit from a power limit.
+            let gpu_limit = if query_gpu {
+                crate::driver::nvml::sample().map_or("?", |g| {
+                    let why = crate::driver::nvml::throttle_label(g.throttle_reasons);
+                    if why.is_empty() { "-" } else { why }
+                })
+            } else {
+                "-"
+            };
             let (bat, _, charging) = crate::commands::power_cmd::get_live_power_status();
             let stop = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_BATTERY_LIMIT_UP).unwrap_or(0);
             let resume = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_BATTERY_LIMIT_DOWN).unwrap_or(0);
             crate::log_info!(
                 "STATUS",
-                "mode={} boost={} fanpol={} | CPU {}C {:.1}W {}MHz {}% | GPU {}C {:.1}W {}MHz {}% | fan {}/{} rpm | bat {}% ac={} chg={} window={}/{} | self {:.1}ms/s panel={} osd={}",
+                "mode={} boost={} fanpol={} | CPU {}C {:.1}W {}MHz {}% | GPU {}C {:.1}W {}MHz {}% | fan {}/{} rpm | bat {}% ac={} chg={} window={}/{} | self {:.1}ms/s panel={} osd={} gpulim={}",
                 s.power_mode, s.fan_boost as u8, cfg.preset_fan_policy,
                 s.cpu_temp, s.cpu_power_w, s.cpu_freq, s.cpu_usage,
                 s.gpu_temp, s.gpu_power_w, s.gpu_core_freq, s.gpu_usage,
                 s.cpu_fan_rpm, s.gpu_fan_rpm,
                 bat, s.is_dc_online as u8, charging as u8, stop, resume,
-                self_ms_per_s, MAIN_WINDOW_VISIBLE.load(Ordering::Relaxed) as u8, crate::system::rtss_osd::is_feeding() as u8
+                self_ms_per_s, MAIN_WINDOW_VISIBLE.load(Ordering::Relaxed) as u8, crate::system::rtss_osd::is_feeding() as u8, gpu_limit
             );
             }
         })
