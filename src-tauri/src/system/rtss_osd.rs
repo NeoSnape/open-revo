@@ -304,6 +304,11 @@ pub fn start(ec: crate::driver::ec_bridge::SharedEcBridge, gpu: crate::driver::g
         .ok();
 }
 
+/// True while the in-game OSD is being fed (RTSS running and a 3D app hooked).
+pub fn is_feeding() -> bool {
+    SLOT_HELD.load(Ordering::SeqCst)
+}
+
 /// Free our OSD slot (on exit or when the feature is turned off).
 pub fn release_now() {
     if let Some(map) = Mapping::open() {

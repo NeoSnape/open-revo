@@ -143,7 +143,10 @@ pub fn start_telemetry_loop(
                     if !SCREEN_SUSPENDED.load(Ordering::SeqCst) && !REBOOT_FREEZE.load(Ordering::SeqCst) {
                         let _ = app.emit("hardware-state-updated", &state);
                     }
-                    std::thread::sleep(Duration::from_millis(1500));
+                    // Nobody can see the panel behind the screen blank: one refresh every 15 s keeps
+                    // its numbers roughly current for the moment the screen comes back.
+                    let pause = if crate::system::screen_blank::is_active() { 15_000 } else { 1500 };
+                    std::thread::sleep(Duration::from_millis(pause));
                 } else {
                     // State 2: Standby Low Power (20s slow heartbeat, zero events emitted)
                     std::thread::sleep(Duration::from_secs(20));
@@ -193,8 +196,17 @@ pub fn start_status_logger(
 ) {
     std::thread::Builder::new()
         .name("openrevo-status-log".into())
-        .spawn(move || loop {
+        .spawn(move || {
+            let mut last_cpu = own_cpu_ms();
+            let mut last_at = std::time::Instant::now();
+            loop {
             std::thread::sleep(Duration::from_secs(60));
+            // This process's own CPU use since the previous line (ms of CPU per second), so the cost
+            // of the panel, the screen blank and the in-game OSD can be read off the log afterwards.
+            let now_cpu = own_cpu_ms();
+            let self_ms_per_s = (now_cpu - last_cpu) / last_at.elapsed().as_secs_f64().max(1.0);
+            last_cpu = now_cpu;
+            last_at = std::time::Instant::now();
             if SCREEN_SUSPENDED.load(Ordering::SeqCst) {
                 continue;
             }
@@ -211,13 +223,28 @@ pub fn start_status_logger(
             let resume = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_BATTERY_LIMIT_DOWN).unwrap_or(0);
             crate::log_info!(
                 "STATUS",
-                "mode={} boost={} fanpol={} | CPU {}C {:.1}W {}MHz {}% | GPU {}C {:.1}W {}MHz {}% | fan {}/{} rpm | bat {}% ac={} chg={} window={}/{}",
+                "mode={} boost={} fanpol={} | CPU {}C {:.1}W {}MHz {}% | GPU {}C {:.1}W {}MHz {}% | fan {}/{} rpm | bat {}% ac={} chg={} window={}/{} | self {:.1}ms/s panel={} osd={}",
                 s.power_mode, s.fan_boost as u8, cfg.preset_fan_policy,
                 s.cpu_temp, s.cpu_power_w, s.cpu_freq, s.cpu_usage,
                 s.gpu_temp, s.gpu_power_w, s.gpu_core_freq, s.gpu_usage,
                 s.cpu_fan_rpm, s.gpu_fan_rpm,
-                bat, s.is_dc_online as u8, charging as u8, stop, resume
+                bat, s.is_dc_online as u8, charging as u8, stop, resume,
+                self_ms_per_s, MAIN_WINDOW_VISIBLE.load(Ordering::Relaxed) as u8, crate::system::rtss_osd::is_feeding() as u8
             );
+            }
         })
         .ok();
+}
+
+/// Kernel + user CPU time this process has used so far, in milliseconds.
+fn own_cpu_ms() -> f64 {
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    let (mut created, mut exited, mut kernel, mut user) =
+        (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
+    if unsafe { GetProcessTimes(GetCurrentProcess(), &mut created, &mut exited, &mut kernel, &mut user) }.is_err() {
+        return 0.0;
+    }
+    let ticks = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
+    (ticks(kernel) + ticks(user)) as f64 / 10_000.0
 }

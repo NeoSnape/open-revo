@@ -127,9 +127,12 @@ type Curve = &'static [(u8, u8)];
 const OFFICIAL_CPU: Curve = &[(48, 30), (52, 35), (56, 40), (60, 50), (64, 55), (68, 60), (72, 70), (76, 80), (80, 90), (85, 100)];
 const OFFICIAL_GPU: Curve = &[(46, 30), (50, 35), (54, 40), (58, 50), (62, 55), (66, 60), (70, 70), (74, 80), (78, 90), (81, 100)];
 
-// 办公: 45 W CPU / 65 W GPU. Starts at 55 °C, stops again below 45 °C (see OFFICE_FAN_STOP_GAP_C).
-const OFFICE_CPU: Curve = &[(55, 25), (60, 30), (65, 35), (70, 42), (75, 50), (80, 62), (85, 80), (90, 100)];
-const OFFICE_GPU: Curve = &[(52, 25), (57, 30), (62, 35), (67, 42), (72, 50), (77, 62), (82, 80), (87, 100)];
+// 办公: 45 W CPU / 65 W GPU. Starts at 50 °C so that the fans keep turning at 25 % (~1660 rpm) at
+// idle instead of cycling. Logs 2026-11: at 25 % the CPU settles at 48-51 °C and is back at 55 °C two
+// minutes after the fans stop, and the EC stops them about 6 °C below the start point whatever
+// DownT[0] says (a 55 °C start meant a start/stop every ~9 minutes, also with DownT[0] = 45).
+const OFFICE_CPU: Curve = &[(50, 25), (60, 30), (65, 35), (70, 42), (75, 50), (80, 62), (85, 80), (90, 100)];
+const OFFICE_GPU: Curve = &[(47, 25), (57, 30), (62, 35), (67, 42), (72, 50), (77, 62), (82, 80), (87, 100)];
 
 // 均衡: 75-85 W CPU / 115 W GPU. Quieter than official in the 65-80 °C gaming band, still 100 % at 90 °C.
 const BALANCED_CPU: Curve = &[(50, 28), (55, 33), (60, 38), (65, 45), (70, 55), (75, 65), (80, 78), (85, 90), (90, 100)];
@@ -139,20 +142,8 @@ const BALANCED_GPU: Curve = &[(47, 28), (52, 33), (57, 38), (62, 45), (67, 55), 
 const TURBO_CPU: Curve = &[(45, 30), (50, 38), (55, 45), (60, 55), (65, 65), (70, 75), (75, 85), (80, 95), (85, 100)];
 const TURBO_GPU: Curve = &[(43, 30), (48, 38), (53, 45), (58, 55), (63, 65), (68, 75), (72, 85), (76, 95), (80, 100)];
 
-/// Degrees below the start temperature at which a running fan stops again.
-pub const FAN_STOP_GAP_C: u8 = 5;
-/// 办公 only. Two weeks of logs (2026-11): at idle the CPU sits at 48-51 °C with the fans at 25 %
-/// and climbs back to 55 °C within two minutes of them stopping, so the 5 °C gap made both fans
-/// start and stop every ~9 minutes (318 cycles in 65 h). With 10 °C they stop only once the machine
-/// is cool enough to stay stopped.
-pub const OFFICE_FAN_STOP_GAP_C: u8 = 10;
-
 /// Build the 16-level UpT/DownT/Duty arrays from a curve.
 pub fn levels_from_curve(curve: &[(u8, u8)]) -> ([u8; 16], [u8; 16], [u8; 16]) {
-    levels_from_curve_with_stop_gap(curve, FAN_STOP_GAP_C)
-}
-
-pub fn levels_from_curve_with_stop_gap(curve: &[(u8, u8)], stop_gap: u8) -> ([u8; 16], [u8; 16], [u8; 16]) {
     let mut upt = [255u8; 16];
     let mut downt = [255u8; 16];
     let mut duty = [0u8; 16];
@@ -162,10 +153,11 @@ pub fn levels_from_curve_with_stop_gap(curve: &[(u8, u8)], stop_gap: u8) -> ([u8
         upt[i + 1] = t;
         duty[i + 1] = (d.min(100) as u16 * 2) as u8;
     }
-    // Hysteresis: `stop_gap` °C before stopping the fan entirely, 3 °C between running levels.
+    // Hysteresis: 5 °C before stopping the fan entirely (the EC appears to use its own value for
+    // this one, see OFFICE_CPU), 3 °C between running levels.
     for i in 0..n {
         let next_up = upt[i + 1];
-        let gap = if i == 0 { stop_gap } else { 3 };
+        let gap = if i == 0 { 5 } else { 3 };
         downt[i] = next_up.saturating_sub(gap).max(if i == 0 { 0 } else { upt[i] });
     }
     // Unused tail keeps the top duty (EC requires a monotonic table).
@@ -177,12 +169,8 @@ pub fn levels_from_curve_with_stop_gap(curve: &[(u8, u8)], stop_gap: u8) -> ([u8
 }
 
 fn table(cpu: Curve, gpu: Curve) -> FanTableData {
-    table_with_stop_gap(cpu, gpu, FAN_STOP_GAP_C)
-}
-
-fn table_with_stop_gap(cpu: Curve, gpu: Curve, stop_gap: u8) -> FanTableData {
-    let (cpu_upt, cpu_downt, cpu_duty) = levels_from_curve_with_stop_gap(cpu, stop_gap);
-    let (gpu_upt, gpu_downt, gpu_duty) = levels_from_curve_with_stop_gap(gpu, stop_gap);
+    let (cpu_upt, cpu_downt, cpu_duty) = levels_from_curve(cpu);
+    let (gpu_upt, gpu_downt, gpu_duty) = levels_from_curve(gpu);
     let max_duty = cpu_duty[15].max(gpu_duty[15]);
     FanTableData { cpu_upt, cpu_downt, cpu_duty, gpu_upt, gpu_downt, gpu_duty, max_duty }
 }
@@ -201,7 +189,7 @@ pub fn preset_fan_table(ui_mode: u8, policy: &str) -> FanTableData {
         return official_table();
     }
     match ui_mode {
-        1 => table_with_stop_gap(OFFICE_CPU, OFFICE_GPU, OFFICE_FAN_STOP_GAP_C),
+        1 => table(OFFICE_CPU, OFFICE_GPU),
         3 => table(TURBO_CPU, TURBO_GPU),
         _ => table(BALANCED_CPU, BALANCED_GPU),
     }
@@ -258,13 +246,11 @@ mod tests {
     }
 
     #[test]
-    fn office_stops_ten_degrees_below_start() {
+    fn office_starts_at_fifty() {
         let t = preset_fan_table(1, FAN_POLICY_TUNED);
-        assert_eq!((t.cpu_upt[1], t.cpu_downt[0]), (55, 45));
-        assert_eq!((t.gpu_upt[1], t.gpu_downt[0]), (52, 42));
-        assert_eq!(t.cpu_downt[1], 57);
-        let b = preset_fan_table(2, FAN_POLICY_TUNED);
-        assert_eq!((b.cpu_upt[1], b.cpu_downt[0]), (50, 45));
+        assert_eq!((t.cpu_upt[1], t.cpu_duty[1]), (50, 50));
+        assert_eq!((t.gpu_upt[1], t.gpu_duty[1]), (47, 50));
+        assert_eq!(t.cpu_upt[2], 60);
     }
 
     #[test]
