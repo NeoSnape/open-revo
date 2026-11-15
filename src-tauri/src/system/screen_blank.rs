@@ -73,6 +73,7 @@ thread_local! {
 /// Read by the keyboard hook and the rest of the app; written only by the screen thread.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static BLANKED_AT_TICK: AtomicU64 = AtomicU64::new(0);
+static UNBLANKED_AT_TICK: AtomicU64 = AtomicU64::new(0);
 static THREAD_ID: OnceLock<u32> = OnceLock::new();
 /// Incremented by the screen thread after every restore (lets exit wait for it).
 static RESTORES: AtomicU32 = AtomicU32::new(0);
@@ -83,6 +84,14 @@ fn tick_ms() -> u64 {
 
 pub fn is_active() -> bool {
     ACTIVE.load(Ordering::SeqCst)
+}
+
+/// True while the screen is blanked and for two seconds after a restore began. The chassis mode key
+/// pressed to wake the screen also arrives as an ACPI event a few milliseconds later; it must only
+/// wake, not switch the mode (it used to cycle on from the blank's Office mode and overwrite the
+/// remembered mode for this power source).
+pub fn swallows_mode_key() -> bool {
+    is_active() || tick_ms().saturating_sub(UNBLANKED_AT_TICK.load(Ordering::SeqCst)) < 2000
 }
 
 fn marker_path() -> std::path::PathBuf {
@@ -353,10 +362,8 @@ fn do_blank() {
                 Err(e) => crate::log_warn!("SCREEN", "Could not switch to {} Hz while blanked: {}", BLANK_HZ, e),
             }
         }
-        let mode_before = crate::system::mode::effective();
-        if crate::system::mode::begin_override(crate::system::mode::Override::ScreenBlank, BLANK_MODE) {
-            b.saved_mode = Some(mode_before);
-        }
+        b.saved_mode = Some(crate::system::mode::effective());
+        crate::system::mode::begin_override(crate::system::mode::Override::ScreenBlank, BLANK_MODE);
         crate::log_info!(
             "SCREEN",
             "Screen blanked: overlay {}x{}, backlight {:?} -> 0, refresh {} Hz{}, mode {:?} -> {}; system stays awake. Any key restores.",
@@ -374,6 +381,7 @@ fn do_blank() {
 
 fn do_unblank(reason: &str) {
     let Some(b) = CURRENT.with(|c| c.borrow_mut().take()) else { return };
+    UNBLANKED_AT_TICK.store(tick_ms(), Ordering::SeqCst);
     ACTIVE.store(false, Ordering::SeqCst);
 
     // Refresh rate first, still behind the black overlay, so the mode-switch flicker is not seen.

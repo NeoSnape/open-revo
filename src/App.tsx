@@ -339,7 +339,10 @@ export default function App() {
       try {
         await invoke('set_power_mode', { mode });
       } catch (e) {
+        // Refused (e.g. Beast/Custom on battery): stop showing the mode that was not applied.
         console.error('Failed to set power mode:', e);
+        overrideLockRef.current.power_mode = { val: mode, expiry: 0 };
+        fetchStatus();
       }
     }
   };

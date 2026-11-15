@@ -316,6 +316,16 @@ export const CustomTuningPanel: React.FC<CustomTuningPanelProps> = ({
 
   const handleSelectProfile = async (id: string) => {
     try {
+      // An edit made in the last 350 ms is still waiting in the auto-save timer, which the profile
+      // switch below cancels: save it to the profile being left first.
+      if (autoSaveDebounceRef.current) {
+        clearTimeout(autoSaveDebounceRef.current);
+        autoSaveDebounceRef.current = null;
+        const leaving = presetsListRef.current.find((p) => p.id === activeProfileIdRef.current);
+        if (leaving && JSON.stringify(profileRef.current) !== initialProfileRef.current) {
+          await invoke('save_profile_preset', { preset: { ...leaving, profile: profileRef.current } }).catch(console.error);
+        }
+      }
       const target = await invoke<CustomProfilePreset>('set_active_profile_id', { id });
       setActiveProfileId(id);
       const targetMin = appConfig?.cpu_temp_target_min ?? 85;

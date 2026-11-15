@@ -177,22 +177,24 @@ fn apply_now(mode: u8) {
     crate::system::power_mode::apply_full_power_mode(mode);
 }
 
-/// Temporarily run in `mode` without changing the user's selection. Returns false (and does nothing)
-/// if the hardware is already in that mode. Blocks until the mode is applied.
-pub fn begin_override(kind: Override, mode: u8) -> bool {
+/// Temporarily run in `mode` without changing the user's selection. Blocks until the mode is
+/// applied. The override is registered even when the hardware is already in that mode: another
+/// override may be what put it there (lid closed while the screen is blanked), and when that one
+/// ends this one must still hold the mode.
+pub fn begin_override(kind: Override, mode: u8) {
     let _op = OPERATION.lock();
     let current = effective();
-    if current == mode {
-        return false;
-    }
     {
         let mut c = CENTER.lock();
         c.overrides.retain(|(k, _)| *k != kind);
         c.overrides.push((kind, mode));
     }
+    if current == mode {
+        crate::log_info!("MODE", "Override {:?}: already in {} (selected stays {})", kind, mode, selected());
+        return;
+    }
     crate::log_info!("MODE", "Override {:?}: {} -> {} (selected stays {})", kind, current, mode, selected());
     apply_now(mode);
-    true
 }
 
 /// End a temporary override and go back to the selected mode (or to an older override still active).

@@ -69,8 +69,12 @@ pub fn wait_next(timeout: Duration) -> EcSnapshot {
     let sh = shared();
     let mut snap = sh.snapshot.lock();
     let seen = snap.tick;
-    if snap.tick == seen {
-        let _ = sh.ticked.wait_for(&mut snap, timeout);
+    let deadline = std::time::Instant::now() + timeout;
+    // Loop: a condition variable may wake without a new tick.
+    while snap.tick == seen {
+        if sh.ticked.wait_until(&mut snap, deadline).timed_out() {
+            break;
+        }
     }
     *snap
 }

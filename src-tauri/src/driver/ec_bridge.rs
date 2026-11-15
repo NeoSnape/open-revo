@@ -111,9 +111,17 @@ pub fn absorb_slow_sample(cache: &SharedStateCache, bytes: &[u8], rpm: &mut RpmF
     // by OpenRevo custom profile, NOT an autonomous EC mode switch.
     // We must NEVER let the poller misinterpret 0 as Balance and revert Custom Mode!
     if now >= c.power_mode_cooldown_until && c.power_mode != 4 {
-        let mode_bits = raw_mode & 0x1E;
-        if (mode_bits & 0x10) != 0 {
-            c.power_mode = 3; // Turbo
+        // Upstream switched the cached mode to Turbo here. Only `system::mode` changes the mode
+        // now; an EC that reports Turbo on its own is logged (once per occurrence) for the next
+        // log review instead of silently making the panel disagree with the selected mode.
+        static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let ec_says_turbo = (raw_mode & 0x10) != 0;
+        if ec_says_turbo && c.power_mode != 3 {
+            if !REPORTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                crate::log_warn!("EC_BRIDGE", "EC mode index 0x{:02X} reports Turbo while the mode is {}; not adopting it", raw_mode, c.power_mode);
+            }
+        } else {
+            REPORTED.store(false, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
@@ -248,9 +256,14 @@ impl EcBridge {
         // Apply whatever is the newest request when the worker gets to run: two quick requests
         // start two workers in no guaranteed order, and the older one must not win.
         let cache = Arc::clone(&self.cache);
-        thread::spawn(move || {
+        thread::spawn(move || loop {
             let newest = cache.lock().power_mode;
             crate::system::power_mode::apply_full_power_mode(newest);
+            // Workers are not ordered: if a newer request was applied before this one, the
+            // hardware now holds the older mode. Whoever finishes last checks and corrects it.
+            if cache.lock().power_mode == newest {
+                break;
+            }
         });
     }
 

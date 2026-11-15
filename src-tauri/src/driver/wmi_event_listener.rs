@@ -78,9 +78,14 @@ fn dispatch_acpi_event(
     match code {
         176 | 192 | 201 => {
             // QKEY_MODESWITCH / OSD_FanModeSwitch (176) / SC_SwitchOC (192) / SC_CustomMode (201)
-            if last_switch_time.elapsed() >= Duration::from_millis(500) {
+            if crate::system::screen_blank::swallows_mode_key() {
+                crate::log_info!("WMI_LISTENER", "Mode key pressed while the screen is blanked: wake only, mode unchanged");
+                crate::system::screen_blank::unblank("key press");
+            } else if last_switch_time.elapsed() >= Duration::from_millis(500) {
                 *last_switch_time = Instant::now();
-                let current_mode = ec_bridge.lock().get_power_mode();
+                // Cycle from the mode the user selected, not from a temporary override.
+                let _ = ec_bridge;
+                let current_mode = crate::system::mode::selected();
                 let is_dc = crate::commands::hardware_cmd::is_dc_round_plugged_in();
                 let cfg = crate::system::config::load_config();
                 let next_mode = if is_dc || cfg.unlock_battery_power_limit {

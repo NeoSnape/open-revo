@@ -6,15 +6,9 @@ use crate::system::hooks;
 
 #[tauri::command]
 pub fn set_win_key_locked(locked: bool) -> bool {
-    hooks::set_win_key_locked(locked);
-    let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family();
-    if supports_legacy_ec {
-        let hw_locked = crate::driver::wmi_ec::is_winkey_locked_hw();
-        if hw_locked != locked {
-            crate::driver::wmi_ec::send_winkey_lock_trigger();
-        }
-    }
-    crate::system::config::modify_config(|c| c.win_key_locked = locked);
+    // Same path as the overview switch (hook + EC trigger with the re-send check + config); the
+    // mini drawer used to have its own copy here without the re-send.
+    let _ = crate::system::device_switches::set_switch("win_key", locked);
     hooks::is_win_key_locked()
 }
 
