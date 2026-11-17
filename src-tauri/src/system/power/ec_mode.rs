@@ -115,7 +115,7 @@ pub fn apply_ec_hardware_mode(ui_mode: u8) {
             wmi_ec::set_custom_mode_ec(false);
             wmi_ec::wmi_write_ec(wmi_ec::ADDR_FAN_RAMP_RATE, 0x83);
             wmi_ec::set_fan_isolated_output(false);
-            // 7. Apply Silent Fan Table
+            // 7. Apply Silent Fan Table (sets the independent-output bit again for the tuned table)
             apply_mode_fan_table(1);
         }
         2 => {

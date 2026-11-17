@@ -39,7 +39,16 @@ pub fn apply_mode_fan_table(ui_mode: u8) {
         crate::log_info!("POWER_MODE", "apply_mode_fan_table: Legacy Dual-Mode chassis detected, yielding to native EC firmware fan curve");
         return;
     }
-    let table = get_mode_fan_table(ui_mode);
+    // THETCX Office: with the independent-output bit clear the EC runs its own zero-RPM rule
+    // (starts at ~54 °C, stops at ~49 °C CPU / 39 °C GPU whatever UpT/DownT say), so the fans
+    // started and stopped every ~9 minutes at idle (logs 11-14..11-17, identical with UpT 55
+    // and 50). With the bit set the EC follows the RAM table at every level, as in Custom mode,
+    // where the fans never stop at idle. Only for the tuned table; "official" stays OEM-like.
+    if ui_mode == 1 {
+        let follow = cfg.preset_fan_policy != crate::machine::FAN_POLICY_OFFICIAL;
+        crate::driver::wmi_ec::set_fan_isolated_output(follow);
+    }
+    let table = crate::machine::preset_fan_table(ui_mode, &cfg.preset_fan_policy);
     apply_fan_table_to_ec(&table);
 }
 
