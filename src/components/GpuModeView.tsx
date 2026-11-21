@@ -13,6 +13,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 import { DisplayTuningModal } from './display/DisplayTuningModal';
 import { BrightnessControl } from './display/BrightnessControl';
@@ -356,16 +357,22 @@ export const GpuModeView: React.FC = () => {
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
   useEffect(() => {
+    let disposed = false;
+    let visibilitySyncedByEvent = false;
+    let brightnessInterval: ReturnType<typeof setInterval> | null = null;
+    let lastVisibleSyncAt = 0;
+
     fetchGpuInfo();
     fetchTuningState();
     fetchCalibrationState();
 
     invoke<boolean>('get_miniled_support')
       .then((supported) => {
+        if (disposed) return;
         setIsMiniLedSupported(supported);
         if (supported) {
           invoke<boolean>('get_miniled_status')
-            .then(setMiniLedEnabled)
+            .then((val) => { if (!disposed) setMiniLedEnabled(val); })
             .catch(() => {});
         }
       })
@@ -374,34 +381,124 @@ export const GpuModeView: React.FC = () => {
     const fetchBrightness = () => {
       if (Date.now() - isInteractingBrightnessRef.current < 1500) return;
       invoke<number>('get_display_brightness')
-        .then((val) => { if (typeof val === 'number' && val >= 0 && val <= 100) setBrightness(val); })
+        .then((val) => { if (!disposed && typeof val === 'number' && val >= 0 && val <= 100) setBrightness(val); })
         .catch(() => {});
     };
-    const handleFocusSync = () => {
+
+    const stopPolling = () => {
+      if (brightnessInterval) {
+        clearInterval(brightnessInterval);
+        brightnessInterval = null;
+      }
+    };
+
+    const startPolling = () => {
+      if (!disposed && !brightnessInterval) {
+        brightnessInterval = setInterval(fetchBrightness, 3000);
+      }
+    };
+
+    const handleVisibleSync = () => {
+      const now = Date.now();
+      if (now - lastVisibleSyncAt < 250) return;
+      lastVisibleSyncAt = now;
       fetchBrightness();
       fetchCalibrationState(activeDeviceNameRef.current || undefined);
     };
-    fetchBrightness();
+
+    const applyVisibility = (visible: boolean, immediate: boolean, fromEvent = true) => {
+      if (disposed) return;
+      if (fromEvent) {
+        visibilitySyncedByEvent = true;
+      } else if (visibilitySyncedByEvent) {
+        return;
+      }
+      if (visible) {
+        if (immediate) handleVisibleSync();
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+
+    const initVisibility = async () => {
+      let visible = document.visibilityState !== 'hidden';
+      try {
+        const win = getCurrentWindow();
+        const [vis, min] = await Promise.all([win.isVisible(), win.isMinimized()]);
+        visible = vis && !min && document.visibilityState !== 'hidden';
+      } catch (_) {}
+      if (!disposed && !visibilitySyncedByEvent) {
+        if (visible) {
+          fetchBrightness();
+          applyVisibility(true, false, false);
+        } else {
+          applyVisibility(false, false, false);
+        }
+      }
+    };
+    initVisibility();
+
+    const handleFocusSync = () => applyVisibility(true, true);
+    const handleVisibilityChange = () => {
+      const vis = document.visibilityState !== 'hidden';
+      applyVisibility(vis, vis);
+    };
     window.addEventListener('focus', handleFocusSync);
-    const brightnessInterval = setInterval(fetchBrightness, 3000);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     let unlistenBrightness: (() => void) | undefined;
+    let unlistenColor: (() => void) | undefined;
+    let unlistenWindowVis: (() => void) | undefined;
+    let unlistenTauriFocus: (() => void) | undefined;
+
     listen<number>('display-brightness-changed', (event) => {
       if (typeof event.payload === 'number' && Date.now() - isInteractingBrightnessRef.current > 600) {
         setBrightness(event.payload);
       }
-    }).then((fn) => { unlistenBrightness = fn; });
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlistenBrightness = fn;
+    }).catch(() => {});
 
-    let unlistenColor: (() => void) | undefined;
     listen('color-calibration-changed', () => {
       fetchCalibrationState(activeDeviceNameRef.current || undefined);
-    }).then((fn) => { unlistenColor = fn; });
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlistenColor = fn;
+    }).catch(() => {});
+
+    listen<boolean>('window-visibility-changed', (event) => {
+      const vis = Boolean(event.payload);
+      applyVisibility(vis, vis);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlistenWindowVis = fn;
+    }).catch(() => {});
+
+    try {
+      getCurrentWindow()
+        .listen('tauri://focus', handleFocusSync)
+        .then((fn) => {
+          if (disposed) fn();
+          else unlistenTauriFocus = fn;
+        })
+        .catch(() => {});
+    } catch (_) {}
 
     return () => {
+      disposed = true;
       window.removeEventListener('focus', handleFocusSync);
-      clearInterval(brightnessInterval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      stopPolling();
+      if (brightnessTimerRef.current) {
+        clearTimeout(brightnessTimerRef.current);
+        brightnessTimerRef.current = null;
+      }
       if (unlistenBrightness) unlistenBrightness();
       if (unlistenColor) unlistenColor();
+      if (unlistenWindowVis) unlistenWindowVis();
+      if (unlistenTauriFocus) unlistenTauriFocus();
     };
   }, []);
 

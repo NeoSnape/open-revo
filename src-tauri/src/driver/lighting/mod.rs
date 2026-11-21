@@ -347,7 +347,9 @@ impl IteLightingManager {
 
     /// Apply Monochrome White Backlight level directly via Motherboard EC (for Thin & Light laptops)
     pub fn apply_monochrome_white_ec(&self, enabled: bool, brightness_idx: u8) -> bool {
-        self.is_sleeping.store(false, std::sync::atomic::Ordering::SeqCst);
+        if enabled && brightness_idx > 0 {
+            self.is_sleeping.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
 
         // Branch 1: Declarative HAL / Thin & Light models (IP3, Baolongda, Xingyao, etc.)
         let hal = crate::hal::get_hardware_driver();
@@ -392,12 +394,14 @@ impl IteLightingManager {
         _speed_idx: u8,
         color_hex: &str,
     ) -> bool {
-        self.is_sleeping.store(false, std::sync::atomic::Ordering::SeqCst);
+        let is_on = enabled && brightness_idx > 0;
+        if is_on {
+            self.is_sleeping.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
 
         // Branch 1: Declarative HAL / Non-Tongfang platforms (e.g. Baolongda MRID6)
         let hal = crate::hal::get_hardware_driver();
         if hal.kind() != crate::hal::DriverKind::TongfangAcpi {
-            let is_on = enabled && brightness_idx > 0;
             let level = if is_on { brightness_idx.min(3) } else { 0 };
             let (r, g, b) = if is_on {
                 parse_hex_color(color_hex)
@@ -419,11 +423,10 @@ impl IteLightingManager {
         }
 
         let cur_bl_white = crate::driver::wmi_ec::wmi_read_ec(ADDR_BACKLIGHT_WHITE).unwrap_or(0);
-        let is_on = enabled && brightness_idx > 0;
 
         let mut new_bl_white = cur_bl_white;
         if is_on {
-            new_bl_white &= !0x02; // Bit 1 清零 = 启用背光供电
+            new_bl_white &= !0x03; // Bit 1 清零 = 启用背光供电; Bit 0 清零 = 确保单区全彩RGB模式(而非单白模式)
             new_bl_white &= 0x0F;  // 保留低 4 位，清零旧亮度高 4 位
             let high_nibble = match brightness_idx {
                 1 => 0x30,
@@ -501,7 +504,9 @@ impl IteLightingManager {
         direction_idx: u8,
         color_hex: &str,
     ) -> bool {
-        self.is_sleeping.store(false, std::sync::atomic::Ordering::SeqCst);
+        if enabled && brightness_idx > 0 {
+            self.is_sleeping.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
 
         let contract = self.active_contract();
         if contract.backend == "None" || contract.keyboard_type == "None" {
@@ -547,7 +552,9 @@ impl IteLightingManager {
         color_hex: &str,
         zone_colors: Option<&[String; 4]>,
     ) -> bool {
-        self.is_sleeping.store(false, std::sync::atomic::Ordering::SeqCst);
+        if enabled && brightness_idx > 0 {
+            self.is_sleeping.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
         self.refresh_devices();
 
         // Hardware Power Guard: Ensure EC Backlight Disable Bit is cleared (0 = Enabled)
@@ -670,7 +677,9 @@ impl IteLightingManager {
         speed_idx: u8,
         color_hex: &str,
     ) -> bool {
-        self.is_sleeping.store(false, std::sync::atomic::Ordering::SeqCst);
+        if enabled {
+            self.is_sleeping.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
 
         // Hardware Constitution Gate:
         if !self.is_coastline_allowed() {
@@ -697,7 +706,9 @@ impl IteLightingManager {
         speed_idx: u8,
         color_hex: &str,
     ) -> bool {
-        self.is_sleeping.store(false, std::sync::atomic::Ordering::SeqCst);
+        if enabled {
+            self.is_sleeping.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
 
         // Hardware Constitution Gate:
         if !self.is_air_vent_allowed() {
@@ -1068,21 +1079,30 @@ impl IteLightingManager {
         if has_ec_logo {
             Self::sync_ec_logo(false, 1, 0, "#000000");
         }
+
+        // Regardless of which hardware path ran during turn-off, strictly mark sleeping.
+        self.is_sleeping.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Restore all lighting zones to their saved preset states
     pub fn restore_all(&self) {
-        // Clear EC ADDR_BACKLIGHT_WHITE Bit 1 so hardware rail is active
+        let st = self.state.lock().clone();
+        // Hardware Rail Power Gate: only enable hardware rail if keyboard is active & bright;
+        // otherwise assert hardware rail cutoff (Bit 1 = 1) to prevent auto-light upon boot.
         if let Some(cur_bl) = crate::driver::wmi_ec::wmi_read_ec(ADDR_BACKLIGHT_WHITE) {
-            if (cur_bl & 0x02) != 0 {
-                let _ = crate::driver::wmi_ec::wmi_write_ec(ADDR_BACKLIGHT_WHITE, cur_bl & !0x02);
+            let target = if st.kb_enabled && st.kb_brightness > 0 {
+                cur_bl & !0x02
+            } else {
+                cur_bl | 0x02
+            };
+            if target != cur_bl {
+                let _ = crate::driver::wmi_ec::wmi_write_ec(ADDR_BACKLIGHT_WHITE, target);
+                if let Some(cur_trigger) = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_TRIGGER_BYTE) {
+                    let _ = crate::driver::wmi_ec::wmi_write_ec(crate::driver::wmi_ec::ADDR_TRIGGER_BYTE, cur_trigger | 0x20);
+                }
             }
         }
-        if let Some(cur_trigger) = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_TRIGGER_BYTE) {
-            let _ = crate::driver::wmi_ec::wmi_write_ec(crate::driver::wmi_ec::ADDR_TRIGGER_BYTE, cur_trigger | 0x20);
-        }
         self.refresh_devices();
-        let st = self.state.lock().clone();
         if self.has_keyboard_device() {
             if self.has_perkey_keyboard_device() {
                 if st.kb_engine == "hardware" {
@@ -1261,11 +1281,19 @@ impl IteLightingManager {
         let is_single_zone = (raw_kb_support & 0x04) != 0;
         let cur_st = self.state.lock().clone();
         let is_streamer = cur_st.kb_engine == "streamer";
+        let kb_is_on = cur_st.kb_enabled && cur_st.kb_brightness > 0;
 
         std::thread::spawn(move || {
             crate::log_info!("LIGHTING", "Startup Ceremony launched across detected hardware tier");
 
-            if has_perkey {
+            if !kb_is_on {
+                // Respect user preference when keyboard backlight is disabled: keep keyboard dark.
+                crate::log_info!("LIGHTING", "Startup Ceremony: keyboard is disabled in user presets, keeping keyboard dark");
+                if let Some(cur_bl) = crate::driver::wmi_ec::wmi_read_ec(ADDR_BACKLIGHT_WHITE) {
+                    let _ = crate::driver::wmi_ec::wmi_write_ec(ADDR_BACKLIGHT_WHITE, cur_bl | 0x02);
+                }
+                std::thread::sleep(Duration::from_millis(1500));
+            } else if has_perkey {
                 // T1 旗舰全彩逐键：若为推流引擎，注入 60FPS 绚丽星光烟花流光 (Sparkle 111)；若为硬件 MCU，下发全彩波浪 (Wave 3)
                 if is_streamer {
                     let streamer = crate::driver::ite_streamer::get_global_streamer();

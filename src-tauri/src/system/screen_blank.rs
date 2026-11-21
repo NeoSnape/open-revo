@@ -91,7 +91,11 @@ pub fn is_active() -> bool {
 /// wake, not switch the mode (it used to cycle on from the blank's Office mode and overwrite the
 /// remembered mode for this power source).
 pub fn swallows_mode_key() -> bool {
-    is_active() || tick_ms().saturating_sub(UNBLANKED_AT_TICK.load(Ordering::SeqCst)) < 2000
+    if is_active() {
+        return true;
+    }
+    let unblanked = UNBLANKED_AT_TICK.load(Ordering::SeqCst);
+    unblanked != 0 && tick_ms().saturating_sub(unblanked) < 2000
 }
 
 fn marker_path() -> std::path::PathBuf {
@@ -331,7 +335,7 @@ fn do_blank() {
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, cx, cy, SWP_SHOWWINDOW);
         let _ = SetForegroundWindow(hwnd);
-        if SetTimer(hwnd, KEY_POLL_TIMER, 150, None) == 0 {
+        if SetTimer(hwnd, KEY_POLL_TIMER, 250, None) == 0 {
             crate::log_warn!("SCREEN", "Key poll timer could not be started; wake relies on the keyboard hook");
         }
         let _ = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
@@ -341,6 +345,20 @@ fn do_blank() {
         ACTIVE.store(true, Ordering::SeqCst);
         // Watcher switches the execution state to "system + display required" on its next tick.
         crate::system::switches::set_screen_off(true);
+        // Tuck the main panel back into the tray if it was open (e.g. blanked via the UI button),
+        // so panel=1 does not stay stuck behind the black overlay keeping telemetry active.
+        if let Some(app) = crate::system::mode::app_handle() {
+            let app_clone = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                use tauri::Manager;
+                if let Some(w) = app_clone.get_webview_window("main") {
+                    if w.is_visible().unwrap_or(false) {
+                        let _ = w.hide();
+                    }
+                }
+                crate::system::telemetry::set_main_window_visible(false);
+            });
+        }
 
         match crate::system::display::get_brightness_levels() {
             Ok(level) => {

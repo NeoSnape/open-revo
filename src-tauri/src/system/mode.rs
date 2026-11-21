@@ -48,6 +48,15 @@ pub enum Override {
     Sleep,
 }
 
+impl Override {
+    pub fn label(self) -> &'static str {
+        match self {
+            Override::ScreenBlank => "screen_blank",
+            Override::Sleep => "sleep",
+        }
+    }
+}
+
 struct Center {
     app: Option<AppHandle>,
     ec: Option<SharedEcBridge>,
@@ -96,6 +105,15 @@ pub fn selected() -> u8 {
     }
 }
 
+pub(crate) fn app_handle() -> Option<AppHandle> {
+    CENTER.lock().app.clone()
+}
+
+/// Active temporary override (if any), returning `(override_kind, override_mode)`.
+pub fn active_override() -> Option<(Override, u8)> {
+    CENTER.lock().overrides.last().copied()
+}
+
 /// The mode the hardware is in right now.
 pub fn effective() -> u8 {
     match handles().1 {
@@ -116,7 +134,7 @@ pub fn blocked_on_battery(mode: u8) -> bool {
         && !crate::system::config::load_config().unlock_battery_power_limit
 }
 
-/// Tick the tray, wake the OSD and tell both webviews.
+/// Tick the tray, wake the OSD and broadcast to all webviews.
 fn announce(app: &Option<AppHandle>, mode: u8, with_osd: bool) {
     crate::update_tray_power_mode(mode);
     if let Some(app) = app {
@@ -124,8 +142,6 @@ fn announce(app: &Option<AppHandle>, mode: u8, with_osd: bool) {
             crate::system::osd_window::wake_osd_if_enabled(app);
         }
         let _ = app.emit("physical-mode-switched", mode);
-        let _ = app.emit_to("main", "physical-mode-switched", mode);
-        let _ = app.emit_to("osd", "physical-mode-switched", mode);
     }
 }
 
@@ -141,6 +157,9 @@ pub fn select(mode: u8, origin: Origin) -> Result<(), String> {
         crate::log_warn!("MODE", "{} blocked for {:?}: not on the barrel-jack charger", mode_label(mode), origin);
         // The tray ticks its item before asking; put the tick back.
         crate::update_tray_power_mode(effective());
+        if let Some(app) = handles().0 {
+            let _ = app.emit("power-mode-rejected", BATTERY_BLOCK_MESSAGE);
+        }
         return Err(BATTERY_BLOCK_MESSAGE.to_string());
     }
 

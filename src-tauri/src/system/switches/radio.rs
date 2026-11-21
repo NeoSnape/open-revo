@@ -19,6 +19,37 @@ pub fn record_bluetooth_state(enable: bool) {
     );
 }
 
+/// Query both Bluetooth and Wi-Fi radio states in a single WinRT GetRadiosAsync() roundtrip.
+/// Returns `(bluetooth_on, wifi_on)` and refreshes the BT cache when Bluetooth is present.
+pub fn get_bt_and_wifi_states() -> (Option<bool>, Option<bool>) {
+    unsafe {
+        let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED);
+    }
+    let _ = Radio::RequestAccessAsync().ok().and_then(|op| op.get().ok());
+    let mut bt = None;
+    let mut wifi = None;
+    if let Some(radios) = Radio::GetRadiosAsync().ok().and_then(|op| op.get().ok()) {
+        for radio in radios {
+            if let (Ok(kind), Ok(state)) = (radio.Kind(), radio.State()) {
+                let on = state == RadioState::On;
+                if kind == RadioKind::Bluetooth && bt.is_none() {
+                    bt = Some(on);
+                    record_bluetooth_state(on);
+                } else if kind == RadioKind::WiFi && wifi.is_none() {
+                    wifi = Some(on);
+                }
+                if bt.is_some() && wifi.is_some() {
+                    break;
+                }
+            }
+        }
+    }
+    if wifi.is_none() {
+        wifi = get_wifi_state_netsh();
+    }
+    (bt, wifi)
+}
+
 /// Query real-time Bluetooth radio status using native WinRT Radio API (0ms, zero PowerShell)
 pub fn get_native_bluetooth_radio_state() -> Option<bool> {
     unsafe {
@@ -130,14 +161,7 @@ pub fn set_wifi_radio_state_native(enable: bool) -> bool {
     found
 }
 
-/// Read real-time Wi-Fi status (WinRT Radio first, fallback to netsh)
-pub fn get_realtime_wifi_state() -> Option<bool> {
-    // 1. Try WinRT Radio API first (instantaneous, 0ms)
-    if let Some(state) = get_wifi_radio_state_native() {
-        return Some(state);
-    }
-
-    // 2. Fallback: netsh interface show interface (~10ms)
+fn get_wifi_state_netsh() -> Option<bool> {
     let output = Command::new("netsh")
         .creation_flags(CREATE_NO_WINDOW)
         .args(["interface", "show", "interface"])
@@ -160,6 +184,17 @@ pub fn get_realtime_wifi_state() -> Option<bool> {
         }
     }
     None
+}
+
+/// Read real-time Wi-Fi status (WinRT Radio first, fallback to netsh)
+pub fn get_realtime_wifi_state() -> Option<bool> {
+    // 1. Try WinRT Radio API first (instantaneous, 0ms)
+    if let Some(state) = get_wifi_radio_state_native() {
+        return Some(state);
+    }
+
+    // 2. Fallback: netsh interface show interface (~10ms)
+    get_wifi_state_netsh()
 }
 
 /// Auto-detect Wi-Fi/WLAN adapter name dynamically via netsh (5ms, zero PowerShell)

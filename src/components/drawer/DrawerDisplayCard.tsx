@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { HardwareState } from '../../types/hardware';
 import { Tv, Laptop, ChevronDown, Battery, Check, Sun } from 'lucide-react';
 
@@ -44,37 +45,118 @@ export const DrawerDisplayCard: React.FC<DrawerDisplayCardProps> = ({
     }
   };
 
-  // 初始化拉取当前真实屏幕亮度 + 聚焦与周期同步
+  // 初始化拉取当前真实屏幕亮度 + 聚焦与可见态周期同步（隐藏时暂停轮询）
   useEffect(() => {
-    const fetchBrightness = () => {
+    let disposed = false;
+    let visibilitySyncedByEvent = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    let lastFetchAt = 0;
+
+    const fetchBrightness = (force = false) => {
+      const now = Date.now();
       // 若用户在 1.5 秒内曾手动滑动或点击调节，则跳过本次同步，防止滑块抖动
-      if (Date.now() - isInteractingBrightnessRef.current < 1500) return;
+      if (now - isInteractingBrightnessRef.current < 1500) return;
+      if (!force && now - lastFetchAt < 250) return;
+      lastFetchAt = now;
       invoke<number>('get_display_brightness')
         .then((val) => {
-          if (typeof val === 'number' && val >= 0 && val <= 100) {
+          if (!disposed && typeof val === 'number' && val >= 0 && val <= 100) {
             setBrightness(val);
           }
         })
         .catch((err) => console.warn('Failed to get display brightness:', err));
     };
 
-    fetchBrightness();
-    window.addEventListener('focus', fetchBrightness);
-    const interval = setInterval(fetchBrightness, 3000);
+    const stopPolling = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+
+    const startPolling = () => {
+      if (!disposed && !interval) {
+        interval = setInterval(() => fetchBrightness(true), 3000);
+      }
+    };
+
+    const applyVisibility = (visible: boolean, immediate: boolean, fromEvent = true) => {
+      if (disposed) return;
+      if (fromEvent) {
+        visibilitySyncedByEvent = true;
+      } else if (visibilitySyncedByEvent) {
+        return;
+      }
+      if (visible) {
+        if (immediate) fetchBrightness(false);
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+
+    const initVisibility = async () => {
+      let visible = document.visibilityState !== 'hidden';
+      try {
+        const win = getCurrentWindow();
+        const [vis, min] = await Promise.all([win.isVisible(), win.isMinimized()]);
+        visible = vis && !min && document.visibilityState !== 'hidden';
+      } catch (_) {}
+      applyVisibility(visible, visible, false);
+    };
+    initVisibility();
+
+    const handleFocus = () => applyVisibility(true, true);
+    const handleVisibilityChange = () => {
+      const vis = document.visibilityState !== 'hidden';
+      applyVisibility(vis, vis);
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     let unlistenBrightness: (() => void) | undefined;
+    let unlistenWindowVis: (() => void) | undefined;
+    let unlistenTauriFocus: (() => void) | undefined;
+
     listen<number>('display-brightness-changed', (event) => {
       if (typeof event.payload === 'number' && Date.now() - isInteractingBrightnessRef.current > 600) {
         setBrightness(event.payload);
       }
     }).then((fn) => {
-      unlistenBrightness = fn;
-    });
+      if (disposed) fn();
+      else unlistenBrightness = fn;
+    }).catch(() => {});
+
+    listen<boolean>('window-visibility-changed', (event) => {
+      const vis = Boolean(event.payload);
+      applyVisibility(vis, vis);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlistenWindowVis = fn;
+    }).catch(() => {});
+
+    try {
+      getCurrentWindow()
+        .listen('tauri://focus', handleFocus)
+        .then((fn) => {
+          if (disposed) fn();
+          else unlistenTauriFocus = fn;
+        })
+        .catch(() => {});
+    } catch (_) {}
 
     return () => {
-      window.removeEventListener('focus', fetchBrightness);
-      clearInterval(interval);
+      disposed = true;
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      stopPolling();
+      if (brightnessTimerRef.current) {
+        clearTimeout(brightnessTimerRef.current);
+        brightnessTimerRef.current = null;
+      }
       if (unlistenBrightness) unlistenBrightness();
+      if (unlistenWindowVis) unlistenWindowVis();
+      if (unlistenTauriFocus) unlistenTauriFocus();
     };
   }, []);
 

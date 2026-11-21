@@ -186,30 +186,24 @@ pub fn handle_tray_menu_event(
             let _ = crate::system::mode::select(4, crate::system::mode::Origin::Tray);
         }
         "toggle_fan" => {
-            let ec = ec_clone.lock();
-            let current = ec.is_fan_boost();
-            let next = !current;
-            ec.set_fan_boost(next);
-            crate::system::config::modify_config(|c| c.fan_boost = next);
-            update_tray_fan_boost(next);
-            crate::system::osd_window::wake_osd_if_enabled(&app_handle);
+            // `set_fan_boost` already persists `config.fan_boost` and updates the tray checkmark;
+            // drop the EcBridge lock immediately before waking OSD / emitting events.
+            let next = {
+                let ec = ec_clone.lock();
+                let next = !ec.is_fan_boost();
+                ec.set_fan_boost(next);
+                next
+            };
+            crate::system::osd_window::wake_osd_if_enabled(app_handle);
             let _ = app_handle.emit("fan-boost-changed", next);
-            let _ = app_handle.emit_to("main", "fan-boost-changed", next);
-            let _ = app_handle.emit_to("osd", "fan-boost-changed", next);
             let _ = app_handle.emit("physical-fan-boost-switched", next);
-            let _ = app_handle.emit_to("main", "physical-fan-boost-switched", next);
-            let _ = app_handle.emit_to("osd", "physical-fan-boost-switched", next);
         }
         "takeover_toggle" => {
-            let is_running = crate::system::process::is_oem_service_running();
-            if is_running {
-                let _ = crate::system::service_mgr::pause_oem_services();
-            } else {
-                let _ = crate::system::service_mgr::resume_oem_services();
-            }
-            let next_state = !is_running;
-            let _ = app_handle.emit("oem-service-status-changed", next_state);
-            let _ = app_handle.emit_to("main", "oem-service-status-changed", next_state);
+            let is_running = crate::system::process::probe_oem_service_running();
+            // If OEM services are running, take over (pause); otherwise restore (resume).
+            crate::commands::system_cmd::apply_oem_takeover(is_running, ec_clone);
+            let oem_running_now = crate::system::process::probe_oem_service_running();
+            let _ = app_handle.emit("oem-service-status-changed", oem_running_now);
         }
         "quit" => {
             // RunEvent::Exit runs the shutdown (subviews, hardware handover, screen restore) once.

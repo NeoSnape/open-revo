@@ -198,11 +198,7 @@ fn dispatch_acpi_event(
 
                     crate::system::osd_window::wake_osd_if_enabled(app_handle);
                     let _ = app_handle.emit("fan-boost-changed", next_state);
-                    let _ = app_handle.emit_to("main", "fan-boost-changed", next_state);
-                    let _ = app_handle.emit_to("osd", "fan-boost-changed", next_state);
                     let _ = app_handle.emit("physical-fan-boost-switched", next_state);
-                    let _ = app_handle.emit_to("main", "physical-fan-boost-switched", next_state);
-                    let _ = app_handle.emit_to("osd", "physical-fan-boost-switched", next_state);
                 }
             } else {
                 crate::log_debug!("WMI_LISTENER", "Fn+1 hotkey event {} debounced (elapsed < 500ms)", code);

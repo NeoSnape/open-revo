@@ -208,7 +208,7 @@ export const FullDashboard: React.FC<FullDashboardProps> = ({
       el.removeEventListener('scroll', checkNavScroll);
       window.removeEventListener('resize', checkNavScroll);
     };
-  }, [status]);
+  }, [capabilities]);
 
   useEffect(() => {
     const el = navBarRef.current;

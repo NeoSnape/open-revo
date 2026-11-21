@@ -57,20 +57,42 @@ extern "system" {
 
 type FnPowerSetActiveOverlayScheme = unsafe extern "system" fn(*const GUID) -> u32;
 
-fn set_active_overlay_scheme(guid_ptr: *const GUID) -> u32 {
-    unsafe {
-        let dll_name = b"powrprof.dll\0";
-        let h_mod = LoadLibraryA(dll_name.as_ptr());
+struct PowrProfFns {
+    set_overlay: Option<FnPowerSetActiveOverlayScheme>,
+    call_nt_power: Option<FnCallNtPowerInformation>,
+}
+
+fn powrprof_fns() -> &'static PowrProfFns {
+    static FNS: std::sync::OnceLock<PowrProfFns> = std::sync::OnceLock::new();
+    FNS.get_or_init(|| unsafe {
+        let h_mod = LoadLibraryA(c"powrprof.dll".as_ptr().cast());
         if h_mod.is_null() {
-            return 1;
+            return PowrProfFns {
+                set_overlay: None,
+                call_nt_power: None,
+            };
         }
-        let fn_name = b"PowerSetActiveOverlayScheme\0";
-        let p_func = GetProcAddress(h_mod, fn_name.as_ptr());
-        if p_func.is_null() {
-            return 2;
+        let p_overlay = GetProcAddress(h_mod, c"PowerSetActiveOverlayScheme".as_ptr().cast());
+        let p_nt_power = GetProcAddress(h_mod, c"CallNtPowerInformation".as_ptr().cast());
+        PowrProfFns {
+            set_overlay: if p_overlay.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute::<*mut std::ffi::c_void, FnPowerSetActiveOverlayScheme>(p_overlay))
+            },
+            call_nt_power: if p_nt_power.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute::<*mut std::ffi::c_void, FnCallNtPowerInformation>(p_nt_power))
+            },
         }
-        let func: FnPowerSetActiveOverlayScheme = std::mem::transmute(p_func);
-        func(guid_ptr)
+    })
+}
+
+fn set_active_overlay_scheme(guid_ptr: *const GUID) -> u32 {
+    match powrprof_fns().set_overlay {
+        Some(func) => unsafe { func(guid_ptr) },
+        None => 2,
     }
 }
 
@@ -96,18 +118,8 @@ type FnCallNtPowerInformation = unsafe extern "system" fn(
 /// Query live CPU frequency and limits across cores (zero overhead, in-memory kernel query).
 /// Returns (current_mhz, max_mhz, mhz_limit) for core 0.
 pub fn get_cpu_frequency_info() -> Option<(u32, u32, u32)> {
+    let func = powrprof_fns().call_nt_power?;
     unsafe {
-        let dll_name = b"powrprof.dll\0";
-        let h_mod = LoadLibraryA(dll_name.as_ptr());
-        if h_mod.is_null() {
-            return None;
-        }
-        let fn_name = b"CallNtPowerInformation\0";
-        let p_func = GetProcAddress(h_mod, fn_name.as_ptr());
-        if p_func.is_null() {
-            return None;
-        }
-        let func: FnCallNtPowerInformation = std::mem::transmute(p_func);
         let mut info: [ProcessorPowerInformation; 64] = [ProcessorPowerInformation::default(); 64];
         let buf_size = std::mem::size_of_val(&info) as u32;
         // 11 = ProcessorInformation
@@ -149,7 +161,12 @@ pub fn apply_full_power_mode(ui_mode: u8) {
     sync_oem_main_option(ui_mode);
     if ui_mode == 4 {
         let cfg = crate::system::config::load_config();
-        sync_oem_mode4_profile(&cfg.custom_profile);
+        let active_profile = crate::system::config::list_profiles()
+            .into_iter()
+            .find(|p| p.id == cfg.active_profile_id)
+            .map(|p| p.profile)
+            .unwrap_or(cfg.custom_profile);
+        sync_oem_mode4_profile(&active_profile);
     }
 }
 
@@ -172,7 +189,7 @@ pub fn apply_windows_power_overlay(ui_mode: u8) {
         }
         2 => (&GUID_BALANCED as *const GUID, "GUID_BALANCED (平衡)"),
         3 => (&GUID_TURBO_PERF as *const GUID, "GUID_TURBO_PERF (最佳性能)"),
-        4 => (&GUID_TURBO_PERF as *const GUID, "GUID_TURBO_PERF (最佳性能)"),
+        4 => (&GUID_BALANCED as *const GUID, "GUID_BALANCED (平衡-自定义模式)"),
         _ => (&GUID_BALANCED as *const GUID, "GUID_BALANCED (平衡)"),
     };
 
@@ -350,15 +367,8 @@ pub fn spawn_hardware_state_restore(ec_for_restore: crate::driver::ec_bridge::Sh
             cfg.usb_charge_enabled,
         );
 
-        // Restore Win Key Lock state (Software Hook + EC TRIGGER_WINLOCK)
-        let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family();
-        if supports_legacy_ec {
-            let hw_locked = crate::driver::wmi_ec::is_winkey_locked_hw();
-            if hw_locked != cfg.win_key_locked {
-                crate::driver::wmi_ec::send_winkey_lock_trigger();
-            }
-        }
-        crate::system::hooks::set_win_key_locked(cfg.win_key_locked);
+        // Restore Win Key Lock state (Software Hook + EC TRIGGER_WINLOCK with re-send check)
+        crate::system::switches::sync_winkey_lock_verified(cfg.win_key_locked);
         crate::log_info!("POWER_RESTORE", "Startup restored Win Key lock state: locked={}", cfg.win_key_locked);
 
         // Restore Touchpad state if disabled by user
@@ -425,9 +435,6 @@ pub fn spawn_hardware_state_restore(ec_for_restore: crate::driver::ec_bridge::Sh
             if let Err(e) = ppm::set_active_windows_power_scheme(target_guid) {
                 crate::log_warn!("POWER_RESTORE", "Failed to restore preferred Windows power scheme {}: {}", target_guid, e);
             }
-        }
-        if cfg.high_perf_scheme {
-            crate::system::power_mode::apply_windows_power_overlay(cfg.power_mode);
         }
         // Restore lighting presets seamlessly on startup
         std::thread::sleep(std::time::Duration::from_millis(600));

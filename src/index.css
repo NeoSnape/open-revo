@@ -152,8 +152,10 @@ button {
   backdrop-filter: blur(24px) saturate(180%);
   -webkit-backdrop-filter: blur(24px) saturate(180%);
   border: 1px solid var(--border-subtle);
-  border-radius: 14px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  /* Fills the whole window: match the native Windows 11 corner radius and leave the
+     outer drop shadow to the OS, otherwise the gap shows up as an arc at each corner. */
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
   overflow: hidden;
 }
 
@@ -3421,4 +3423,45 @@ body,
   font-weight: 700;
   color: var(--status-ok);
   font-family: var(--font-mono);
+}
+
+/* Lightweight auto-dismissing toast (e.g. battery power-mode rejection) */
+@keyframes app-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.app-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 10000;
+  max-width: calc(100vw - 28px);
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  background: rgba(15, 23, 42, 0.94);
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  color: #fde68a;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: center;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  pointer-events: none;
+  animation: app-toast-in 160ms ease-out;
+}
+
+[data-theme="mono"] .app-toast {
+  background: rgba(18, 22, 30, 0.96);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #f8fafc;
 }

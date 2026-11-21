@@ -1,7 +1,36 @@
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+static CPU_MON_WAKE: LazyLock<(parking_lot::Mutex<u64>, parking_lot::Condvar)> =
+    LazyLock::new(|| (parking_lot::Mutex::new(0), parking_lot::Condvar::new()));
+
+/// Snapshot the current wake generation BEFORE checking atomic predicates, so a
+/// concurrent `wake_cpu_monitor()` call cannot be lost before waiting.
+fn current_wake_gen() -> u64 {
+    *CPU_MON_WAKE.0.lock()
+}
+
+fn wait_for_wake(seen: u64, interval: Duration) {
+    let (lock, cvar) = &*CPU_MON_WAKE;
+    let mut gen = lock.lock();
+    let deadline = Instant::now() + interval;
+    while *gen == seen {
+        if cvar.wait_until(&mut gen, deadline).timed_out() {
+            break;
+        }
+    }
+}
+
+/// Immediately wake the background CPU monitor loop (e.g. when the panel opens,
+/// RTSS OSD starts feeding, or before a periodic STATUS snapshot).
+pub fn wake_cpu_monitor() {
+    let (lock, cvar) = &*CPU_MON_WAKE;
+    let mut gen = lock.lock();
+    *gen = gen.wrapping_add(1);
+    cvar.notify_all();
+}
 
 #[repr(C)]
 #[derive(Default, Debug, Clone, Copy)]
@@ -183,8 +212,18 @@ impl CpuMonitor {
             };
 
             let _num_cpus = num_cpus();
+            // Hoist reusable buffers out of the hot loop to avoid per-tick heap allocations.
+            let mut proc_info = vec![ProcessorPowerInformation::default(); 128];
+            let mut tz_buf: Vec<u8> = Vec::new();
+            let mut pwr_buf: Vec<u8> = Vec::new();
 
             loop {
+                let pause_gen = current_wake_gen();
+                if crate::system::telemetry::is_paused_for_sleep() {
+                    wait_for_wake(pause_gen, Duration::from_secs(12));
+                    continue;
+                }
+
                 // 1. Calculate CPU Usage via GetSystemTimes
                 if let Some(ref get_times) = get_system_times {
                     let mut idle = FILETIME::default();
@@ -215,25 +254,33 @@ impl CpuMonitor {
 
                 // 2. Read real-time CPU frequency via CallNtPowerInformation (ProcessorInformation = 11)
                 if let Some(ref func) = call_nt_power {
-                    let mut info = vec![ProcessorPowerInformation::default(); 128];
-                    let buf_len = (info.len() * std::mem::size_of::<ProcessorPowerInformation>()) as u32;
+                    proc_info.fill(ProcessorPowerInformation::default());
+                    let buf_len = (proc_info.len() * std::mem::size_of::<ProcessorPowerInformation>()) as u32;
                     let status = unsafe {
                         func(
                             11, // ProcessorInformation
                             std::ptr::null(),
                             0,
-                            info.as_mut_ptr() as *mut std::ffi::c_void,
+                            proc_info.as_mut_ptr() as *mut std::ffi::c_void,
                             buf_len,
                         )
                     };
                     if status == 0 {
-                        let valid: Vec<&ProcessorPowerInformation> = info.iter().filter(|p| p.current_mhz > 0).collect();
-                        if !valid.is_empty() {
-                            let avg_mhz: u64 = valid.iter().map(|p| p.current_mhz as u64).sum::<u64>() / valid.len() as u64;
-                            if let Some(first) = valid.first() {
-                                if first.max_mhz > 0 {
-                                    monitor_clone.base_mhz.store(first.max_mhz, Ordering::SeqCst);
+                        let mut sum_mhz = 0u64;
+                        let mut valid_count = 0u64;
+                        let mut first_max_mhz = 0u32;
+                        for p in &proc_info {
+                            if p.current_mhz > 0 {
+                                if valid_count == 0 {
+                                    first_max_mhz = p.max_mhz;
                                 }
+                                sum_mhz += p.current_mhz as u64;
+                                valid_count += 1;
+                            }
+                        }
+                        if let Some(avg_mhz) = sum_mhz.checked_div(valid_count) {
+                            if first_max_mhz > 0 {
+                                monitor_clone.base_mhz.store(first_max_mhz, Ordering::SeqCst);
                             }
                             // Fallback if PDH is unavailable
                             if pdh_perf_counter.is_none() {
@@ -258,15 +305,18 @@ impl CpuMonitor {
                             let mut item_count = 0u32;
                             let _ = get_array(c, 0x00000200 /* PDH_FMT_DOUBLE */, &mut buf_size, &mut item_count, std::ptr::null_mut());
                             if buf_size > 0 {
-                                let mut buf = vec![0u8; buf_size as usize];
-                                let ret = get_array(c, 0x00000200, &mut buf_size, &mut item_count, buf.as_mut_ptr());
+                                let needed = buf_size as usize;
+                                if tz_buf.len() < needed {
+                                    tz_buf.resize(needed, 0);
+                                }
+                                let ret = get_array(c, 0x00000200, &mut buf_size, &mut item_count, tz_buf.as_mut_ptr());
                                 if ret == 0 && item_count > 0 {
                                     let item_size = std::mem::size_of::<PdhFmtCountervalueItem>();
                                     let mut max_celsius = None;
                                     for i in 0..item_count as usize {
                                         let offset = i * item_size;
-                                        if offset + item_size <= buf.len() {
-                                            let item_ptr = buf.as_ptr().add(offset) as *const PdhFmtCountervalueItem;
+                                        if offset + item_size <= tz_buf.len() {
+                                            let item_ptr = tz_buf.as_ptr().add(offset) as *const PdhFmtCountervalueItem;
                                             let val = (*item_ptr).fmt_value.double_value;
                                             if val > 250.0 && val < 420.0 {
                                                 let c = (val - 273.15).round() as i32;
@@ -289,8 +339,11 @@ impl CpuMonitor {
                             let mut item_count = 0u32;
                             let _ = get_array(c, 0x00000200 /* PDH_FMT_DOUBLE */, &mut buf_size, &mut item_count, std::ptr::null_mut());
                             if buf_size > 0 {
-                                let mut buf = vec![0u8; buf_size as usize];
-                                let ret = get_array(c, 0x00000200, &mut buf_size, &mut item_count, buf.as_mut_ptr());
+                                let needed = buf_size as usize;
+                                if pwr_buf.len() < needed {
+                                    pwr_buf.resize(needed, 0);
+                                }
+                                let ret = get_array(c, 0x00000200, &mut buf_size, &mut item_count, pwr_buf.as_mut_ptr());
                                 if ret == 0 && item_count > 0 {
                                     let item_size = std::mem::size_of::<PdhFmtCountervalueItem>();
                                     let mut pkg_power_mw = None;
@@ -298,8 +351,8 @@ impl CpuMonitor {
 
                                     for i in 0..item_count as usize {
                                         let offset = i * item_size;
-                                        if offset + item_size <= buf.len() {
-                                            let item_ptr = buf.as_ptr().add(offset) as *const PdhFmtCountervalueItem;
+                                        if offset + item_size <= pwr_buf.len() {
+                                            let item_ptr = pwr_buf.as_ptr().add(offset) as *const PdhFmtCountervalueItem;
                                             let val = (*item_ptr).fmt_value.double_value;
                                             if val > max_power_mw {
                                                 max_power_mw = val;
@@ -348,7 +401,18 @@ impl CpuMonitor {
                     }
                 }
 
-                thread::sleep(Duration::from_millis(1500));
+                // Demand-driven cadence: 1.5 s while the panel or RTSS OSD needs live numbers,
+                // 12 s while truly idle / blanked, with immediate condvar wake on demand changes.
+                // Capture generation before reading atomics to avoid lost wakeups.
+                let wake_gen = current_wake_gen();
+                let fast_needed = crate::system::telemetry::is_telemetry_active()
+                    || crate::system::rtss_osd::is_feeding();
+                let interval = if fast_needed {
+                    Duration::from_millis(1500)
+                } else {
+                    Duration::from_secs(12)
+                };
+                wait_for_wake(wake_gen, interval);
             }
         });
 

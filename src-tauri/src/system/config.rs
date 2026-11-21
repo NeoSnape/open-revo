@@ -1122,6 +1122,11 @@ fn load_config_from_disk() -> AppConfig {
                         };
                     }
                 }
+                // Self-healing: If user had active Custom mode (4), ensure AC target is strictly Custom (4)
+                // to prevent legacy defaults (mode 3) from pulling Custom back to Turbo on boot.
+                if cfg.power_mode == 4 && cfg.power_mode_ac != 4 {
+                    cfg.power_mode_ac = 4;
+                }
                 if cfg.power_mode_battery == 0 {
                     cfg.power_mode_battery = if cfg.power_mode == 1 { 1 } else { 2 };
                 }
@@ -1158,18 +1163,26 @@ fn save_config_to_disk(cfg: &AppConfig) {
     }
 }
 
-/// Thread-safe in-memory configuration loader. Returns cached copy in <0.001ms.
-pub fn load_config() -> AppConfig {
-    if let Some(cfg) = CONFIG_CACHE.read().as_ref() {
-        return cfg.clone();
+/// Zero-copy read-only access to the cached configuration (avoids cloning `AppConfig` on hot paths).
+/// Keep `f` trivial; it must not call `modify_config` or `reload_config_from_disk` (would deadlock).
+pub fn with_config<R>(f: impl FnOnce(&AppConfig) -> R) -> R {
+    {
+        let guard = CONFIG_CACHE.read();
+        if let Some(cfg) = guard.as_ref() {
+            return f(cfg);
+        }
     }
     let mut guard = CONFIG_CACHE.write();
-    if let Some(cfg) = guard.as_ref() {
-        return cfg.clone();
+    if guard.is_none() {
+        *guard = Some(load_config_from_disk());
     }
-    let cfg = load_config_from_disk();
-    *guard = Some(cfg.clone());
-    cfg
+    let read_guard = parking_lot::RwLockWriteGuard::downgrade(guard);
+    f(read_guard.as_ref().expect("config cache initialized"))
+}
+
+/// Thread-safe in-memory configuration loader. Returns cached copy in <0.001ms.
+pub fn load_config() -> AppConfig {
+    with_config(|cfg| cfg.clone())
 }
 
 /// The only way to change the configuration: `f` edits the live config under an exclusive lock and

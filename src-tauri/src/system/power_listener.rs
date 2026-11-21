@@ -11,6 +11,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 const WM_POWERBROADCAST: u32 = 0x0218;
+const WM_DISPLAYCHANGE: u32 = 0x007E;
 const WM_QUERYENDSESSION: u32 = 0x0011;
 const WM_ENDSESSION: u32 = 0x0016;
 const WM_DESTROY: u32 = 0x0002;
@@ -83,6 +84,18 @@ fn handle_wake_auto_office() {
 }
 
 fn handle_system_resume_pipeline(event_name: &str) {
+    // Windows delivers PBT_APMRESUMEAUTOMATIC and PBT_APMRESUMESUSPEND (and lid-open) back-to-back
+    // on a manual wake; debounce within 3 s so we don't spawn duplicate restore threads/writes.
+    static LAST_RESUME: parking_lot::Mutex<Option<std::time::Instant>> = parking_lot::Mutex::new(None);
+    {
+        let mut last = LAST_RESUME.lock();
+        if last.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(3)) {
+            crate::log_debug!("POWER_EVENT", "Duplicate resume event ({}) debounced (<3s)", event_name);
+            return;
+        }
+        *last = Some(std::time::Instant::now());
+    }
+
     crate::system::telemetry::set_screen_suspended(false);
     crate::log_info!("POWER_EVENT", "Laptop {}! Restoring power mode & lighting...", event_name);
     handle_wake_auto_office();
@@ -121,14 +134,7 @@ fn handle_system_resume_pipeline(event_name: &str) {
         0x10,
         cfg.fn_lock_enabled,
     );
-    let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family();
-    if supports_legacy_ec {
-        let hw_locked = crate::driver::wmi_ec::is_winkey_locked_hw();
-        if hw_locked != cfg.win_key_locked {
-            crate::driver::wmi_ec::send_winkey_lock_trigger();
-        }
-    }
-    crate::system::hooks::set_win_key_locked(cfg.win_key_locked);
+    crate::system::switches::sync_winkey_lock_verified(cfg.win_key_locked);
     if !cfg.touchpad_enabled {
         crate::driver::wmi_ec::wmi_modify_ec_mask(
             crate::driver::wmi_ec::ADDR_BATTERY_PROTECTION_MODE,
@@ -161,21 +167,25 @@ unsafe extern "system" fn power_wnd_proc(
         WM_POWERBROADCAST => {
             let pbt = wparam.0 as u32;
             if pbt == PBT_APMSUSPEND {
-                // If Keep-Awake is active or screen was turned off for overnight tasks,
-                // NEVER degrade power mode to Office (1) and NEVER shut down water cooling!
-                // (Evaluated before the blank below is ended, which clears the screen-off flag.)
-                let is_running_tasks = crate::system::switches::is_keep_awake() || crate::system::switches::is_screen_off();
-                // Going to standby anyway (lid / power button): end a screen blank so the panel is not
-                // left at 0 % behind a lock screen on resume.
-                if crate::system::screen_blank::is_active() {
-                    std::thread::spawn(|| crate::system::screen_blank::unblank("standby"));
-                }
+                // Only Keep-Awake preserves active high-power mode during standby requests; a screen
+                // blank must NOT skip sleep_auto_office or lighting suspend (otherwise unblank("standby")
+                // ends ScreenBlank without a Sleep override and restores Beast/Custom right before sleep).
+                let is_running_tasks = crate::system::switches::is_keep_awake();
+                let was_blanked = crate::system::screen_blank::is_active();
                 if is_running_tasks {
-                    crate::log_info!("POWER_EVENT", "Standby event received but Keep-Awake or Screen-Off is ACTIVE. Preserving active power mode and water cooling for background tasks.");
+                    if was_blanked {
+                        std::thread::spawn(|| crate::system::screen_blank::unblank("standby"));
+                    }
+                    crate::log_info!("POWER_EVENT", "Standby event received while Keep-Awake is ACTIVE. Preserving active power mode for background tasks.");
                 } else {
                     crate::log_info!("POWER_EVENT", "System is entering Sleep / Hibernate / Standby! Suspending lighting...");
                     crate::system::telemetry::set_screen_suspended(true);
+                    // Register Sleep override synchronously BEFORE unblank("standby") runs so ending
+                    // ScreenBlank sees the Sleep override and stays in Office mode.
                     handle_sleep_auto_office();
+                    if was_blanked {
+                        std::thread::spawn(|| crate::system::screen_blank::unblank("standby"));
+                    }
                     let streamer = crate::driver::ite_streamer::get_global_streamer();
                     streamer.suspend_for_sleep();
                     let lighting = crate::driver::ite_lighting::get_global_lighting();
@@ -217,6 +227,10 @@ unsafe extern "system" fn power_wnd_proc(
                 handle_system_resume_pipeline("resumed from Sleep / Hibernate");
             }
             LRESULT(1)
+        }
+        WM_DISPLAYCHANGE => {
+            crate::system::display::invalidate_display_cache();
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         // Only a question at this point: another app (or the user) can still cancel the shutdown,
         // so nothing is torn down here.

@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::OnceLock;
-use std::time::Duration;
-use parking_lot::Mutex;
+use std::sync::{LazyLock, OnceLock};
+use std::time::{Duration, Instant};
+use parking_lot::{Condvar, Mutex};
 use tauri::{AppHandle, Emitter};
 
 use crate::driver::ec_bridge::SharedEcBridge;
@@ -14,17 +14,49 @@ static ACTIVE_SUBSCRIBERS: AtomicU32 = AtomicU32::new(0);
 static MAIN_WINDOW_VISIBLE: AtomicBool = AtomicBool::new(false);
 static SCREEN_SUSPENDED: AtomicBool = AtomicBool::new(false);
 
+static TELEMETRY_WAKE: LazyLock<(Mutex<u64>, Condvar)> =
+    LazyLock::new(|| (Mutex::new(0), Condvar::new()));
+
+/// Snapshot the current wake generation BEFORE inspecting atomic state, so any
+/// `wake_telemetry_loop()` call between the state check and waiting is never lost.
+fn current_wake_gen() -> u64 {
+    *TELEMETRY_WAKE.0.lock()
+}
+
+/// Immediately wake the telemetry heartbeat loop from its standby sleep.
+pub fn wake_telemetry_loop() {
+    let (lock, cvar) = &*TELEMETRY_WAKE;
+    let mut gen = lock.lock();
+    *gen = gen.wrapping_add(1);
+    cvar.notify_all();
+}
+
+fn sleep_or_wake(seen: u64, duration: Duration) {
+    let (lock, cvar) = &*TELEMETRY_WAKE;
+    let mut gen = lock.lock();
+    let deadline = Instant::now() + duration;
+    while *gen == seen {
+        if cvar.wait_until(&mut gen, deadline).timed_out() {
+            break;
+        }
+    }
+}
+
 fn get_subscribed_sensors() -> &'static Mutex<HashMap<String, HashSet<String>>> {
     static SENSORS: OnceLock<Mutex<HashMap<String, HashSet<String>>>> = OnceLock::new();
     SENSORS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Register a widget or external consumer with specific sensor needs
+/// Register a widget or external consumer with specific sensor needs (idempotent per consumer_id)
 pub fn register_consumer(consumer_id: &str, sensors: &[String]) {
     let mut map = get_subscribed_sensors().lock();
     let set: HashSet<String> = sensors.iter().cloned().collect();
     map.insert(consumer_id.to_string(), set);
-    let count = ACTIVE_SUBSCRIBERS.fetch_add(1, Ordering::SeqCst) + 1;
+    let count = map.len() as u32;
+    ACTIVE_SUBSCRIBERS.store(count, Ordering::SeqCst);
+    drop(map);
+    wake_telemetry_loop();
+    crate::system::cpu_monitor::wake_cpu_monitor();
     crate::log_info!(
         "TELEMETRY",
         "Registered consumer '{}' with {} sensors. Total active consumers: {}",
@@ -38,7 +70,8 @@ pub fn register_consumer(consumer_id: &str, sensors: &[String]) {
 pub fn unregister_consumer(consumer_id: &str) {
     let mut map = get_subscribed_sensors().lock();
     if map.remove(consumer_id).is_some() {
-        let count = ACTIVE_SUBSCRIBERS.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
+        let count = map.len() as u32;
+        ACTIVE_SUBSCRIBERS.store(count, Ordering::SeqCst);
         crate::log_info!(
             "TELEMETRY",
             "Unregistered consumer '{}'. Remaining active consumers: {}",
@@ -57,10 +90,22 @@ pub fn set_main_window_visible(visible: bool) {
             "Main window visibility changed to: {}. (Heartbeat policy updated)",
             visible
         );
+        if let Some(app) = crate::system::webview_orchestrator::WebviewOrchestrator::global().app() {
+            let _ = app.emit_to("main", "window-visibility-changed", visible);
+        }
+        if visible {
+            wake_telemetry_loop();
+            crate::system::cpu_monitor::wake_cpu_monitor();
+        }
     }
 }
 
 static REBOOT_FREEZE: AtomicBool = AtomicBool::new(false);
+
+/// True while telemetry and auxiliary monitors should stay completely paused (reboot or display/system sleep).
+pub fn is_paused_for_sleep() -> bool {
+    REBOOT_FREEZE.load(Ordering::Relaxed) || SCREEN_SUSPENDED.load(Ordering::Relaxed)
+}
 
 /// Report system reboot in progress to completely freeze telemetry polling and GPU hardware access
 pub fn set_reboot_freeze(freeze: bool) {
@@ -79,12 +124,16 @@ pub fn set_screen_suspended(suspended: bool) {
             "Screen suspended changed to: {}. (Telemetry loop parked/resumed)",
             suspended
         );
+        if !suspended {
+            wake_telemetry_loop();
+            crate::system::cpu_monitor::wake_cpu_monitor();
+        }
     }
 }
 
 /// Check if telemetry heartbeat should be actively pulsing (Level 1)
 pub fn is_telemetry_active() -> bool {
-    if REBOOT_FREEZE.load(Ordering::Relaxed) || SCREEN_SUSPENDED.load(Ordering::Relaxed) {
+    if is_paused_for_sleep() || crate::system::screen_blank::is_active() {
         return false;
     }
     MAIN_WINDOW_VISIBLE.load(Ordering::Relaxed)
@@ -92,9 +141,12 @@ pub fn is_telemetry_active() -> bool {
 }
 
 /// Determine whether NVIDIA dGPU queries (NVAPI) should be executed
-/// CRITICAL DEFENSE: If no GPU metrics are requested and main console is closed,
+/// CRITICAL DEFENSE: If no GPU metrics are requested and main console is closed (or screen blanked/suspended),
 /// NEVER query GPU to prevent waking up NVIDIA dGPU from D3Cold ultra-low power state.
 pub fn should_query_gpu() -> bool {
+    if is_paused_for_sleep() || crate::system::screen_blank::is_active() {
+        return false;
+    }
     if MAIN_WINDOW_VISIBLE.load(Ordering::Relaxed) {
         return true;
     }
@@ -124,15 +176,13 @@ pub fn start_telemetry_loop(
         .spawn(move || {
             crate::log_info!("TELEMETRY", "Adaptive dynamic telemetry heartbeat loop initialized.");
             loop {
-                // State 0: System reboot in progress -> Complete freeze to release bus
-                if REBOOT_FREEZE.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(2000));
-                    continue;
-                }
+                // Capture generation before checking atomics so a wake arriving between
+                // the predicate check and `sleep_or_wake` cannot be missed.
+                let wake_gen = current_wake_gen();
 
-                // State 3: Screen suspended / Lock screen -> Deep Freeze
-                if SCREEN_SUSPENDED.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(2000));
+                // State 0 / State 3: Reboot or Screen suspended -> Deep Freeze
+                if is_paused_for_sleep() {
+                    sleep_or_wake(wake_gen, Duration::from_millis(2000));
                     continue;
                 }
 
@@ -140,16 +190,14 @@ pub fn start_telemetry_loop(
                     // State 1: Active Pulse (1.5s interval)
                     let query_gpu = should_query_gpu();
                     let state = collect_hardware_state(&ec_bridge, &gpu_bridge, query_gpu);
-                    if !SCREEN_SUSPENDED.load(Ordering::SeqCst) && !REBOOT_FREEZE.load(Ordering::SeqCst) {
+                    if !is_paused_for_sleep() && !crate::system::screen_blank::is_active() {
                         let _ = app.emit("hardware-state-updated", &state);
                     }
-                    // Nobody can see the panel behind the screen blank: one refresh every 15 s keeps
-                    // its numbers roughly current for the moment the screen comes back.
-                    let pause = if crate::system::screen_blank::is_active() { 15_000 } else { 1500 };
-                    std::thread::sleep(Duration::from_millis(pause));
+                    let post_gen = current_wake_gen();
+                    sleep_or_wake(post_gen, Duration::from_millis(1500));
                 } else {
-                    // State 2: Standby Low Power (20s slow heartbeat, zero events emitted)
-                    std::thread::sleep(Duration::from_secs(20));
+                    // State 2: Standby Low Power (20s slow heartbeat, zero events emitted; woken instantly via condvar)
+                    sleep_or_wake(wake_gen, Duration::from_secs(20));
                 }
             }
         })
@@ -158,14 +206,14 @@ pub fn start_telemetry_loop(
 
 #[tauri::command]
 pub fn report_window_visibility(app: AppHandle, visible: bool) -> Result<(), String> {
-    // The page reports "visible" as soon as it has loaded, also when the app was started minimised
-    // to the tray. Trusting that kept the 1.5 s telemetry loop (and the GPU queries) running until
-    // the panel had been opened and closed once, doubling the idle CPU use after every boot.
-    let really_visible = visible && {
+    // Verify both true and false against the real OS window state:
+    // - A startup `visible=true` while minimized to tray must not wake the loop;
+    // - A delayed `visible=false` after the user already reopened the window must not turn it off.
+    let _ = visible;
+    let really_visible = {
         use tauri::Manager;
-        app.get_webview_window("main").map_or(false, |w| {
-            w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false)
-        })
+        app.get_webview_window("main")
+            .is_some_and(|w| w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false))
     };
     set_main_window_visible(really_visible);
     Ok(())
@@ -210,12 +258,17 @@ pub fn start_status_logger(
             if SCREEN_SUSPENDED.load(Ordering::SeqCst) {
                 continue;
             }
-            let cfg = crate::system::config::load_config();
-            // Only query NVAPI when the dGPU is always on anyway (MUX direct); never wake it in hybrid.
-            let query_gpu = cfg.gpu_mode == "dgpu";
+            // Refresh CPU metrics before logging a STATUS snapshot (important while cpu_monitor is on slow idle cadence).
+            crate::system::cpu_monitor::wake_cpu_monitor();
+            let (query_gpu, preset_fan_policy) = crate::system::config::with_config(|cfg| {
+                // Only query NVAPI when the dGPU is always on anyway (MUX direct); never wake it in hybrid.
+                (cfg.gpu_mode == "dgpu", cfg.preset_fan_policy.clone())
+            });
             if query_gpu {
                 crate::driver::gpu_bridge::GpuBridge::request_telemetry(5000);
                 std::thread::sleep(Duration::from_millis(2500));
+            } else {
+                std::thread::sleep(Duration::from_millis(150));
             }
             let s = collect_hardware_state(&ec_bridge, &gpu_bridge, query_gpu);
             // Why the GPU is holding back right now ("-" = it is not), so a log review can tell a
@@ -234,7 +287,7 @@ pub fn start_status_logger(
             crate::log_info!(
                 "STATUS",
                 "mode={} boost={} fanpol={} | CPU {}C {:.1}W {}MHz {}% | GPU {}C {:.1}W {}MHz {}% | fan {}/{} rpm | bat {}% ac={} chg={} window={}/{} | self {:.1}ms/s panel={} osd={} gpulim={}",
-                s.power_mode, s.fan_boost as u8, cfg.preset_fan_policy,
+                s.power_mode, s.fan_boost as u8, preset_fan_policy,
                 s.cpu_temp, s.cpu_power_w, s.cpu_freq, s.cpu_usage,
                 s.gpu_temp, s.gpu_power_w, s.gpu_core_freq, s.gpu_usage,
                 s.cpu_fan_rpm, s.gpu_fan_rpm,
@@ -257,4 +310,22 @@ fn own_cpu_ms() -> f64 {
     }
     let ticks = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
     (ticks(kernel) + ticks(user)) as f64 / 10_000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regression_consumer_registration_is_idempotent() {
+        let id = "telemetry-regression";
+        let initial = ACTIVE_SUBSCRIBERS.load(Ordering::SeqCst);
+        register_consumer(id, &["cpu_temp".into()]);
+        register_consumer(id, &["gpu_temp".into()]);
+        assert_eq!(ACTIVE_SUBSCRIBERS.load(Ordering::SeqCst), initial + 1);
+        assert!(get_subscribed_sensors().lock()[id].contains("gpu_temp"));
+        unregister_consumer(id);
+        unregister_consumer(id);
+        assert_eq!(ACTIVE_SUBSCRIBERS.load(Ordering::SeqCst), initial);
+    }
 }

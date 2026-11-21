@@ -14,9 +14,9 @@ pub use camera::{
     read_camera_policy_registry, write_camera_consent_registry, write_camera_policy_registry,
 };
 pub use radio::{
-    get_native_bluetooth_radio_state, get_or_detect_wifi_adapter, get_realtime_bluetooth_state,
-    get_realtime_wifi_state, get_wifi_radio_state_native, set_native_bluetooth_radio_state,
-    set_wifi_radio_state_native,
+    get_bt_and_wifi_states, get_native_bluetooth_radio_state, get_or_detect_wifi_adapter,
+    get_realtime_bluetooth_state, get_realtime_wifi_state, get_wifi_radio_state_native,
+    set_native_bluetooth_radio_state, set_wifi_radio_state_native,
 };
 pub use touchpad::{
     ensure_touchpad_device_enabled, get_realtime_touchpad_state, read_ptp_registry_enabled,
@@ -77,8 +77,40 @@ pub fn has_ec_device_switches() -> bool {
         && crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_PROJECT_ID).is_some()
 }
 
+/// Apply Win-key lock to both the software hook and (on Tongfang EC) the hardware trigger,
+/// re-sending the trigger once after 2 s if the EC dropped it while busy.
+pub fn sync_winkey_lock_verified(locked: bool) {
+    crate::system::hooks::set_win_key_locked(locked);
+    let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family();
+    if supports_legacy_ec {
+        let hw_locked = crate::driver::wmi_ec::is_winkey_locked_hw();
+        if hw_locked != locked {
+            crate::driver::wmi_ec::send_winkey_lock_trigger();
+        }
+        // The EC takes up to ~1 s to act on the trigger and drops one that arrives while it
+        // is still busy with the previous toggle (seen 2026-11-15: on, then off 1.2 s later,
+        // left the EC locked while the software side said unlocked). Check and send it again.
+        std::thread::spawn(move || {
+            for _ in 0..10 {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                if crate::driver::wmi_ec::is_winkey_locked_hw() == locked {
+                    return;
+                }
+            }
+            if crate::system::hooks::is_win_key_locked() == locked {
+                crate::log_warn!(
+                    "DEVICE_SWITCH",
+                    "EC Win-key lock did not reach {} after 2 s; sending the trigger again",
+                    locked
+                );
+                crate::driver::wmi_ec::send_winkey_lock_trigger();
+            }
+        });
+    }
+}
+
 pub fn get_switches_state() -> QuickSwitchesState {
-    let mut cfg = crate::system::config::load_config();
+    let cfg = crate::system::config::load_config();
     static ONCE_RESTORE: std::sync::Once = std::sync::Once::new();
     ONCE_RESTORE.call_once(|| {
         // 1. Touchpad restore
@@ -105,14 +137,7 @@ pub fn get_switches_state() -> QuickSwitchesState {
         }
 
         // 2. Win Key Lock restore
-        let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family();
-        if supports_legacy_ec {
-            let hw_locked = crate::driver::wmi_ec::is_winkey_locked_hw();
-            if hw_locked != cfg.win_key_locked {
-                crate::driver::wmi_ec::send_winkey_lock_trigger();
-            }
-        }
-        crate::system::hooks::set_win_key_locked(cfg.win_key_locked);
+        sync_winkey_lock_verified(cfg.win_key_locked);
         crate::log_info!("DEVICE_SWITCH", "First-run restored Win Key lock: locked={}", cfg.win_key_locked);
 
         // 3. Fn Lock restore
@@ -188,62 +213,16 @@ pub fn get_switches_state() -> QuickSwitchesState {
     // 4. Read real-time Touchpad state (hardware status on supported hardware)
     let touchpad_active = touchpad::get_realtime_touchpad_state(has_ec_switches, cfg.touchpad_enabled);
 
-    // 5. Read real-time Wi-Fi state
-    let wifi_active = radio::get_realtime_wifi_state().unwrap_or(cfg.wifi_enabled);
-
-    // 6. Read real-time Bluetooth state
-    let bt_active = radio::get_realtime_bluetooth_state().unwrap_or(cfg.bluetooth_enabled);
+    // 5-6. Read real-time Bluetooth & Wi-Fi states in a single WinRT query
+    let (bt_opt, wifi_opt) = radio::get_bt_and_wifi_states();
+    let wifi_active = wifi_opt.unwrap_or(cfg.wifi_enabled);
+    let bt_active = bt_opt.unwrap_or(cfg.bluetooth_enabled);
 
     let mic_active = audio::get_microphone_state().unwrap_or(cfg.mic_enabled);
     let keep_awake_active = is_keep_awake();
 
-    // Synchronize current live hardware state to persistent config.json
-    let mut changed = false;
-    if cfg.fn_lock_enabled != fn_lock_active {
-        cfg.fn_lock_enabled = fn_lock_active;
-        changed = true;
-    }
-    if cfg.win_key_locked != win_key_active {
-        cfg.win_key_locked = win_key_active;
-        changed = true;
-    }
-    if cfg.camera_enabled != camera_active {
-        cfg.camera_enabled = camera_active;
-        changed = true;
-    }
-    if cfg.mic_enabled != mic_active {
-        cfg.mic_enabled = mic_active;
-        changed = true;
-    }
-    if cfg.keep_awake_enabled != keep_awake_active {
-        cfg.keep_awake_enabled = keep_awake_active;
-        changed = true;
-    }
-    if cfg.touchpad_enabled != touchpad_active {
-        cfg.touchpad_enabled = touchpad_active;
-        changed = true;
-    }
-    if cfg.wifi_enabled != wifi_active {
-        cfg.wifi_enabled = wifi_active;
-        changed = true;
-    }
-    if cfg.bluetooth_enabled != bt_active {
-        cfg.bluetooth_enabled = bt_active;
-        changed = true;
-    }
-    if changed {
-        crate::system::config::modify_config(|c| {
-            c.fn_lock_enabled = cfg.fn_lock_enabled.clone();
-            c.win_key_locked = cfg.win_key_locked.clone();
-            c.camera_enabled = cfg.camera_enabled.clone();
-            c.mic_enabled = cfg.mic_enabled.clone();
-            c.keep_awake_enabled = cfg.keep_awake_enabled.clone();
-            c.touchpad_enabled = cfg.touchpad_enabled.clone();
-            c.wifi_enabled = cfg.wifi_enabled.clone();
-            c.bluetooth_enabled = cfg.bluetooth_enabled.clone();
-        });
-    }
-
+    // Do NOT write config back from a slow getter (H4): probes like pnputil/WinRT can take hundreds
+    // of ms and would overwrite concurrent changes made by the watcher or set_switch.
     QuickSwitchesState {
         wifi: wifi_active,
         bluetooth: bt_active,
@@ -345,35 +324,14 @@ pub fn set_switch(switch_name: &str, enable: bool) -> Result<bool, String> {
             cfg.camera_enabled = enable;
         }
         "win_key" => {
-            // 1. Software Low-Level Keyboard Hook
-            crate::system::hooks::set_win_key_locked(enable);
-
-            // 2. Hardware EC Keyboard Controller WinLock Trigger (pulsed on state difference)
-            let supports_legacy_ec = crate::hal::platform_probe::is_tongfang_family();
-            if supports_legacy_ec {
-                let hw_locked = crate::driver::wmi_ec::is_winkey_locked_hw();
-                if hw_locked != enable {
-                    crate::driver::wmi_ec::send_winkey_lock_trigger();
-                }
-                // The EC takes up to ~1 s to act on the trigger and drops one that arrives while it
-                // is still busy with the previous toggle (seen 2026-11-15: on, then off 1.2 s later,
-                // left the EC locked while the software side said unlocked). Check and send it again.
-                std::thread::spawn(move || {
-                    for _ in 0..10 {
-                        std::thread::sleep(std::time::Duration::from_millis(200));
-                        if crate::driver::wmi_ec::is_winkey_locked_hw() == enable {
-                            return;
-                        }
-                    }
-                    if crate::system::hooks::is_win_key_locked() == enable {
-                        crate::log_warn!("DEVICE_SWITCH", "EC Win-key lock did not reach {} after 2 s; sending the trigger again", enable);
-                        crate::driver::wmi_ec::send_winkey_lock_trigger();
-                    }
-                });
-            }
-
+            sync_winkey_lock_verified(enable);
             cfg.win_key_locked = enable;
-            crate::log_info!("DEVICE_SWITCH", "WinKey lock set to {} (legacy_ec: {})", enable, supports_legacy_ec);
+            crate::log_info!(
+                "DEVICE_SWITCH",
+                "WinKey lock set to {} (legacy_ec: {})",
+                enable,
+                crate::hal::platform_probe::is_tongfang_family()
+            );
         }
         "mic" => {
             let res = audio::set_microphone_state(enable)?;

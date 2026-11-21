@@ -117,6 +117,7 @@ pub fn pause_oem_services() -> Result<(), String> {
 
         // 5. Terminate all companion OEM processes natively
         let killed = crate::system::process::kill_oem_processes_native();
+        crate::system::process::invalidate_oem_process_cache();
         crate::log_info!("TAKEOVER", "Terminated {} lingering OEM processes natively.", killed);
 
         // 6. Refresh notification area to eliminate ghost tray icons
@@ -193,12 +194,30 @@ pub fn resume_oem_services() -> Result<(), String> {
         let mut gcuservice_active = crate::system::process::is_process_running("gcuservice.exe").is_some();
         if !gcuservice_active && gcubridge_active {
             let gcu_wait_start = Instant::now();
-            while gcu_wait_start.elapsed().as_millis() < 6000 {
+            while gcu_wait_start.elapsed().as_millis() < 4000 {
                 if crate::system::process::is_process_running("gcuservice.exe").is_some() {
                     gcuservice_active = true;
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+        }
+
+        // Direct fallback: if GCUService was not spawned by GCUBridge, start it explicitly.
+        if !gcuservice_active {
+            let gcu_key = r"SYSTEM\CurrentControlSet\Services\GCUService";
+            if reg_key_exists(HKEY_LOCAL_MACHINE, gcu_key) {
+                let (sc_code, sc_out, sc_err) = run_cmd_captured("sc.exe", &["start", "GCUService"]);
+                crate::log_info!(
+                    "TAKEOVER",
+                    "Explicitly dispatched sc start GCUService: exit={:?}, out='{}', err='{}'",
+                    sc_code,
+                    sc_out,
+                    sc_err
+                );
+                if crate::system::process::is_process_running("gcuservice.exe").is_some() {
+                    gcuservice_active = true;
+                }
             }
         }
 
@@ -257,8 +276,9 @@ pub fn resume_oem_services() -> Result<(), String> {
             crate::log_warn!("TAKEOVER", "Truth Sniffer could not locate official UI executable to relaunch.");
         }
 
-        // 13. Refresh notification area
+        // 13. Refresh notification area and invalidate OEM process status cache
         refresh_tray_notification_area();
+        crate::system::process::invalidate_oem_process_cache();
 
         crate::log_info!(
             "TAKEOVER",

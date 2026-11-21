@@ -98,17 +98,26 @@ export const OsdOverlay: React.FC = () => {
 
   const [seqKey, setSeqKey] = useState<number>(0);
 
-  const hideTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hideWindowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const configRef = useRef<OsdConfig>(config);
   configRef.current = config;
 
-  const showOsd = (newState: OsdDisplayState) => {
-    if (!configRef.current.enabled) return;
-
+  const clearHideTimers = () => {
     if (hideTimerRef.current) {
       clearTimeout(hideTimerRef.current);
       hideTimerRef.current = null;
     }
+    if (hideWindowTimerRef.current) {
+      clearTimeout(hideWindowTimerRef.current);
+      hideWindowTimerRef.current = null;
+    }
+  };
+
+  const showOsd = (newState: OsdDisplayState) => {
+    if (!configRef.current.enabled) return;
+
+    clearHideTimers();
 
     invoke('show_osd_window').catch(() => {});
     setDisplay(newState);
@@ -116,8 +125,10 @@ export const OsdOverlay: React.FC = () => {
     setSeqKey((prev) => prev + 1);
 
     hideTimerRef.current = setTimeout(() => {
+      hideTimerRef.current = null;
       setActive(false);
-      setTimeout(() => {
+      hideWindowTimerRef.current = setTimeout(() => {
+        hideWindowTimerRef.current = null;
         invoke('hide_osd_window').catch(() => {});
       }, 250);
     }, 1600);
@@ -126,10 +137,7 @@ export const OsdOverlay: React.FC = () => {
   // Dedicated preview trigger: always pops up OSD HUD regardless of enabled status,
   // without mutating or persisting enabled=true (preserves disabled state if turned off).
   const showPreviewOsd = (previewCfg?: Partial<OsdConfig>) => {
-    if (hideTimerRef.current) {
-      clearTimeout(hideTimerRef.current);
-      hideTimerRef.current = null;
-    }
+    clearHideTimers();
 
     if (previewCfg) {
       setConfig((prev) => ({
@@ -154,8 +162,10 @@ export const OsdOverlay: React.FC = () => {
     setSeqKey((prev) => prev + 1);
 
     hideTimerRef.current = setTimeout(() => {
+      hideTimerRef.current = null;
       setActive(false);
-      setTimeout(() => {
+      hideWindowTimerRef.current = setTimeout(() => {
+        hideWindowTimerRef.current = null;
         invoke('hide_osd_window').catch(() => {});
       }, 250);
     }, 1600);
@@ -508,7 +518,7 @@ export const OsdOverlay: React.FC = () => {
 
     return () => {
       unlistenFns.forEach((fn) => fn());
-      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+      clearHideTimers();
     };
   }, []);
 

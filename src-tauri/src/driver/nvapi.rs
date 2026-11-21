@@ -156,6 +156,109 @@ pub fn get_gpu_full_name() -> Option<String> {
     }
 }
 
+// Use u32 storage for the C structure's alignment, without overlapping
+// mutable u32/i32 slices. Casting a signed delta to u32 preserves its bits.
+fn clock_offset_buffer(domain_id: u32, delta_mhz: i32) -> Vec<u32> {
+    // Preserve the existing V1 memory / V2 graphics write protocol.
+    let (size, version) = if domain_id == CLOCK_DOMAIN_MEMORY {
+        (PSTATES20_SIZE_V1, PSTATES20_VER1)
+    } else {
+        (PSTATES20_SIZE_V2, PSTATES20_VER2)
+    };
+    let mut words = vec![0u32; size / 4];
+    words[0] = version;
+    words[2] = 1; // numPstates = 1 (P0)
+    words[3] = 1; // numClocks = 1
+    words[7] = domain_id;
+    words[10] = (delta_mhz * 1000) as u32;
+    words
+}
+
+/// P0 clock-domain allowed offset ranges reported by the driver/VBIOS `ParamDelta` (kHz).
+/// Layout per clock entry (44 bytes = 11 u32 words):
+///   `[0] DomainId, [1] ClockType, [2] IsEditable, [3] DeltaValue, [4] RangeMin, [5] RangeMax, ...`
+/// Rounding tightens both ends (ceil lower bound, floor upper bound) so we never accept an out-of-range offset.
+fn parse_pstates20_offset_ranges(words: &[u32]) -> Option<((i32, i32), (i32, i32))> {
+    const MAX_PSTATES: usize = 16;
+    const MAX_CLOCKS: usize = 8;
+    const PSTATE_WORDS: usize = 456 / 4;
+    const CLOCK_WORDS: usize = 44 / 4;
+
+    if words.len() != PSTATES20_SIZE_V2 / 4 || words[0] != PSTATES20_VER2 {
+        return None;
+    }
+    let num_pstates = words[2] as usize;
+    let num_clocks = words[3] as usize;
+    if !(1..=MAX_PSTATES).contains(&num_pstates) || !(1..=MAX_CLOCKS).contains(&num_clocks) {
+        return None;
+    }
+
+    let ceil_mhz = |khz: i32| -> i32 { (i64::from(khz) + 999).div_euclid(1000) as i32 };
+    let floor_mhz = |khz: i32| -> i32 { i64::from(khz).div_euclid(1000) as i32 };
+
+    let mut result = None;
+    for pstate in 0..num_pstates {
+        let state_start = 5 + pstate * PSTATE_WORDS;
+        if words[state_start] != 0 {
+            continue; // NVAPI_GPU_PERF_PSTATE_P0 only
+        }
+        if result.is_some() {
+            return None; // Ambiguous P0 entries
+        }
+
+        let mut core: Option<(i32, i32)> = None;
+        let mut memory: Option<(i32, i32)> = None;
+        for clock in 0..num_clocks {
+            let start = state_start + 2 + clock * CLOCK_WORDS;
+            let slot = match words[start] {
+                CLOCK_DOMAIN_GRAPHICS => &mut core,
+                CLOCK_DOMAIN_MEMORY => &mut memory,
+                _ => continue,
+            };
+            let min = ceil_mhz(words[start + 4] as i32);
+            let max = floor_mhz(words[start + 5] as i32);
+            if slot.replace((min, max)).is_some() {
+                return None; // Duplicate requested clock domain
+            }
+        }
+
+        let (core_min, core_max) = core?;
+        let (mem_min, mem_max) = memory?;
+        if core_max < core_min || mem_max < mem_min {
+            return None;
+        }
+        result = Some(((core_min, core_max), (mem_min, mem_max)));
+    }
+    result
+}
+
+/// Conservative fallback offset bounds (MHz) when the driver does not answer V2 range queries.
+pub const GPU_OC_CORE_OFFSET_FALLBACK_MHZ: (i32, i32) = (-500, 500);
+pub const GPU_OC_MEM_OFFSET_FALLBACK_MHZ: (i32, i32) = (-1000, 3000);
+
+/// Query driver/VBIOS allowed P0 core and memory clock offset ranges (in MHz).
+pub fn get_gpu_clock_offset_ranges_mhz() -> Option<((i32, i32), (i32, i32))> {
+    let drv = get_driver()?;
+    let _guard = NVAPI_MUTEX.lock();
+
+    let mut words = vec![0u32; PSTATES20_SIZE_V2 / 4];
+    words[0] = PSTATES20_VER2;
+    let ret = unsafe { (drv.get_pstates20)(drv.primary_gpu_handle, words.as_mut_ptr().cast()) };
+    if ret != NVAPI_OK {
+        crate::log_warn!("NVAPI", "GetPstates20(V2) for offset ranges failed: code {}", ret);
+        return None;
+    }
+    parse_pstates20_offset_ranges(&words)
+}
+
+/// Query driver/VBIOS allowed P0 clock offset ranges (MHz), falling back to conservative bounds.
+pub fn gpu_clock_offset_ranges_with_fallback_mhz() -> ((i32, i32), (i32, i32)) {
+    get_gpu_clock_offset_ranges_mhz().unwrap_or((
+        GPU_OC_CORE_OFFSET_FALLBACK_MHZ,
+        GPU_OC_MEM_OFFSET_FALLBACK_MHZ,
+    ))
+}
+
 /// Apply a single clock offset (Core or Memory) via NvAPI_GPU_SetPstates20
 /// domain_id: 0 = Graphics (Core), 4 = Memory
 /// delta_mhz: Frequency offset in MHz (-1000 ~ +1000)
@@ -164,24 +267,8 @@ unsafe fn set_single_clock_offset_raw(
     domain_id: u32,
     delta_mhz: i32,
 ) -> Result<(), i32> {
-    // Memory uses V1 (7316 bytes, 0x00011C94); Graphics uses V2 (7416 bytes, 0x00021CF8)
-    let (buf_size, ver_magic) = if domain_id == CLOCK_DOMAIN_MEMORY {
-        (PSTATES20_SIZE_V1, PSTATES20_VER1)
-    } else {
-        (PSTATES20_SIZE_V2, PSTATES20_VER2)
-    };
-
-    let mut buf = vec![0u8; buf_size];
-    let u32_slice = std::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u32, buf_size / 4);
-    let i32_slice = std::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut i32, buf_size / 4);
-
-    u32_slice[0] = ver_magic;
-    u32_slice[2] = 1;                     // numPstates = 1 (P0 only)
-    u32_slice[3] = 1;                     // numClocks = 1
-    u32_slice[7] = domain_id;             // domainId: 0 for Graphics, 4 for Memory
-    i32_slice[10] = delta_mhz * 1000;     // freqDelta_kHz = MHz * 1000
-
-    let ret = (drv.set_pstates20)(drv.primary_gpu_handle, buf.as_ptr());
+    let words = clock_offset_buffer(domain_id, delta_mhz);
+    let ret = (drv.set_pstates20)(drv.primary_gpu_handle, words.as_ptr().cast());
     if ret == NVAPI_OK {
         Ok(())
     } else {
@@ -223,29 +310,65 @@ pub fn reset_gpu_clock_offsets() -> Result<(), String> {
     set_gpu_clock_offsets(0, 0)
 }
 
-/// Read current clock offsets from the GPU driver
+// NV_GPU_PERF_PSTATES20_INFO_V1 in NVIDIA's nvapi.h has a 20-byte
+// header and 16 P-states. Each P-state is 456 bytes: 8 bytes of ID/flags,
+// eight 44-byte clocks, and four 24-byte base voltages. All fields are 32-bit.
+fn parse_pstates20_clock_offsets(words: &[u32]) -> Option<(i32, i32)> {
+    const MAX_PSTATES: usize = 16;
+    const MAX_CLOCKS: usize = 8;
+    const PSTATE_WORDS: usize = 456 / 4;
+    const CLOCK_WORDS: usize = 44 / 4;
+
+    if words.len() != PSTATES20_SIZE_V1 / 4 || words[0] != PSTATES20_VER1 {
+        return None;
+    }
+    let num_pstates = words[2] as usize;
+    let num_clocks = words[3] as usize;
+    if !(1..=MAX_PSTATES).contains(&num_pstates) || !(1..=MAX_CLOCKS).contains(&num_clocks) {
+        return None;
+    }
+
+    let mut offsets = None;
+    for pstate in 0..num_pstates {
+        let state_start = 5 + pstate * PSTATE_WORDS;
+        if words[state_start] != 0 {
+            continue; // NVAPI_GPU_PERF_PSTATE_P0
+        }
+        if offsets.is_some() {
+            return None; // Ambiguous P0 entries.
+        }
+        let mut core = None;
+        let mut memory = None;
+        for clock in 0..num_clocks {
+            let clock_start = state_start + 2 + clock * CLOCK_WORDS;
+            let target = match words[clock_start] {
+                CLOCK_DOMAIN_GRAPHICS => &mut core,
+                CLOCK_DOMAIN_MEMORY => &mut memory,
+                _ => continue,
+            };
+            // Preserve signed kHz-to-MHz truncation from the public getter.
+            let mhz = (words[clock_start + 3] as i32) / 1000;
+            if target.replace(mhz).is_some() {
+                return None; // Duplicate requested clock domain.
+            }
+        }
+        offsets = Some((core?, memory?));
+    }
+    offsets
+}
+
+/// Read P0 graphics and memory offsets from the GPU driver, in MHz.
 pub fn get_gpu_clock_offsets() -> Option<(i32, i32)> {
     let drv = get_driver()?;
     let _guard = NVAPI_MUTEX.lock();
 
-    let mut buf = vec![0u8; PSTATES20_SIZE_V1];
-    let u32_slice = unsafe {
-        std::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u32, PSTATES20_SIZE_V1 / 4)
-    };
-    u32_slice[0] = PSTATES20_VER1;
-
-    unsafe {
-        let ret = (drv.get_pstates20)(drv.primary_gpu_handle, buf.as_mut_ptr());
-        if ret != NVAPI_OK {
-            return None;
-        }
-
-        let i32_slice = std::slice::from_raw_parts(buf.as_ptr() as *const i32, PSTATES20_SIZE_V1 / 4);
-        // Extract P0 Graphics (offset 0x28 -> i32[10]) and Memory (offset 0x54 -> i32[21]) delta in kHz
-        let core_khz = i32_slice[10];
-        let mem_khz = i32_slice[21];
-        Some((core_khz / 1000, mem_khz / 1000))
+    let mut words = vec![0u32; PSTATES20_SIZE_V1 / 4];
+    words[0] = PSTATES20_VER1;
+    let ret = unsafe { (drv.get_pstates20)(drv.primary_gpu_handle, words.as_mut_ptr().cast()) };
+    if ret != NVAPI_OK {
+        return None;
     }
+    parse_pstates20_clock_offsets(&words)
 }
 
 /// Set GPU Thermal Limit / Temperature Wall in Celsius (e.g. 87°C)
@@ -255,22 +378,151 @@ pub fn set_gpu_thermal_limit(celsius: u32) -> Result<(), String> {
     let _guard = NVAPI_MUTEX.lock();
 
     // Struct: size 780 bytes (0x030C), version 0x0002030C
-    let mut buf = vec![0u8; 780];
-    let u32_slice = unsafe {
-        std::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u32, 780 / 4)
-    };
-    u32_slice[0] = 0x0002030C; // Version 2
-    u32_slice[2] = 1;          // numPolicies = 1
-    u32_slice[3] = 6;          // Target: GPU
-    u32_slice[5] = celsius.clamp(65, 95); // Thermal limit Celsius
+    let mut words = vec![0u32; 780 / 4];
+    words[0] = 0x0002030C; // Version 2
+    words[2] = 1;          // numPolicies = 1
+    words[3] = 6;          // Target: GPU
+    words[5] = celsius.clamp(65, 95); // Thermal limit Celsius
 
     unsafe {
-        let ret = set_thermal(drv.primary_gpu_handle, buf.as_ptr());
+        let ret = set_thermal(drv.primary_gpu_handle, words.as_ptr().cast());
         if ret == NVAPI_OK {
             crate::log_info!("NVAPI", "GPU Thermal limit set to {}°C", celsius);
             Ok(())
         } else {
             Err(format!("NVAPI Set Thermal Policies failed: error code {}", ret))
         }
+    }
+}
+
+#[cfg(test)]
+mod pstates20_tests {
+    use super::*;
+
+    fn fixture(states: u32, clocks: u32) -> Vec<u32> {
+        let mut words = vec![0; 7316 / 4];
+        words[0] = 0x00011c94;
+        words[2] = states;
+        words[3] = clocks;
+        for state in 0..16 {
+            words[(20 + state * 456) / 4] = 8;
+            for clock in 0..8 {
+                words[(28 + state * 456 + clock * 44) / 4] = u32::MAX;
+            }
+        }
+        words
+    }
+
+    fn p0(words: &mut [u32], state: usize) {
+        words[(20 + state * 456) / 4] = 0;
+    }
+
+    fn clock(words: &mut [u32], state: usize, slot: usize, domain: u32, khz: i32) {
+        let byte = 28 + state * 456 + slot * 44;
+        words[byte / 4] = domain;
+        words[(byte + 12) / 4] = khz as u32;
+    }
+
+    fn normal() -> Vec<u32> {
+        let mut words = fixture(1, 2);
+        p0(&mut words, 0);
+        clock(&mut words, 0, 0, 0, 105_000);
+        clock(&mut words, 0, 1, 4, 500_000);
+        words
+    }
+
+    #[test]
+    fn preserves_ordered_offsets_and_signed_mhz_conversion() {
+        let mut words = normal();
+        assert_eq!(parse_pstates20_clock_offsets(&words), Some((105, 500)));
+        for (khz, mhz) in [
+            (0, 0),
+            (-105_000, -105),
+            (1999, 1),
+            (-1999, -1),
+            (i32::MIN, -2_147_483),
+            (i32::MAX, 2_147_483),
+        ] {
+            clock(&mut words, 0, 0, 0, khz);
+            assert_eq!(parse_pstates20_clock_offsets(&words), Some((mhz, 500)));
+        }
+    }
+
+    #[test]
+    fn finds_p0_and_reads_domains_regardless_of_slot() {
+        let mut words = fixture(2, 2);
+        clock(&mut words, 0, 0, 0, 0);
+        clock(&mut words, 0, 1, 4, 0);
+        p0(&mut words, 1);
+        clock(&mut words, 1, 0, 4, 500_000);
+        clock(&mut words, 1, 1, 0, -105_000);
+        assert_eq!(parse_pstates20_clock_offsets(&words), Some((-105, 500)));
+    }
+
+    #[test]
+    fn rejects_invalid_pstates20_buffers() {
+        assert_eq!(parse_pstates20_clock_offsets(&fixture(1, 2)), None);
+        let mut dup = normal();
+        dup[2] = 2;
+        p0(&mut dup, 1);
+        clock(&mut dup, 1, 0, 0, 0);
+        clock(&mut dup, 1, 1, 4, 0);
+        assert_eq!(parse_pstates20_clock_offsets(&dup), None);
+        let mut bad_ver = normal();
+        bad_ver[0] = PSTATES20_VER2;
+        assert_eq!(parse_pstates20_clock_offsets(&bad_ver), None);
+    }
+
+    #[test]
+    fn aligned_clock_writes_preserve_v1_v2_wire_bytes() {
+        for (domain, size, version) in [(0u32, 7416, 0x00021cf8u32), (4, 7316, 0x00011c94)] {
+            for mhz in [-1000i32, -1, 0, 1, 1000] {
+                let words = clock_offset_buffer(domain, mhz);
+                assert_eq!(words.as_ptr() as usize % std::mem::align_of::<u32>(), 0);
+                let actual: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+                let mut expected = vec![0u8; size];
+                expected[0..4].copy_from_slice(&version.to_le_bytes());
+                expected[8..12].copy_from_slice(&1u32.to_le_bytes());
+                expected[12..16].copy_from_slice(&1u32.to_le_bytes());
+                expected[28..32].copy_from_slice(&domain.to_le_bytes());
+                expected[40..44].copy_from_slice(&(mhz * 1000).to_le_bytes());
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    fn v2_with_ranges(core_khz: (i32, i32), mem_khz: (i32, i32)) -> Vec<u32> {
+        let mut words = vec![0u32; PSTATES20_SIZE_V2 / 4];
+        words[0] = PSTATES20_VER2;
+        words[2] = 1;
+        words[3] = 2;
+        words[5] = 0;
+        let g = 7;
+        words[g] = CLOCK_DOMAIN_GRAPHICS;
+        words[g + 4] = core_khz.0 as u32;
+        words[g + 5] = core_khz.1 as u32;
+        let m = g + 11;
+        words[m] = CLOCK_DOMAIN_MEMORY;
+        words[m + 4] = mem_khz.0 as u32;
+        words[m + 5] = mem_khz.1 as u32;
+        words
+    }
+
+    #[test]
+    fn reads_offset_ranges_per_domain() {
+        let words = v2_with_ranges((-1_000_000, 1_000_000), (-1_000_000, 3_000_000));
+        assert_eq!(
+            parse_pstates20_offset_ranges(&words),
+            Some(((-1000, 1000), (-1000, 3000)))
+        );
+    }
+
+    #[test]
+    fn offset_range_rounding_tightens_both_ends() {
+        let words = v2_with_ranges((1_500_500, 2_999_999), (-1_500_500, 1_999));
+        assert_eq!(
+            parse_pstates20_offset_ranges(&words),
+            Some(((1501, 2999), (-1500, 1)))
+        );
     }
 }

@@ -398,7 +398,7 @@ pub fn detect_discrete_gpu() -> Option<(String, u64)> {
                 let parts: Vec<&str> = text.trim().split(',').map(|s| s.trim()).collect();
                 if !parts.is_empty() && !parts[0].is_empty() {
                     let name = parts[0].to_string();
-                    let vram = parts.get(1).and_then(|v| v.parse::<u64>().ok()).unwrap_or(8192);
+                    let vram = parts.get(1).and_then(|v| parse_flexible_u64(v)).unwrap_or(8192);
                     return Some((name, vram));
                 }
             }
@@ -620,9 +620,9 @@ fn detect_initial_gpu() -> (String, u64, u16, u16) {
             let parts: Vec<&str> = text.trim().split(',').map(|s| s.trim()).collect();
             if !parts.is_empty() && !parts[0].is_empty() {
                 let name = parts[0].to_string();
-                let vram = parts.get(1).and_then(|v| v.parse::<u64>().ok()).unwrap_or(8192);
-                let def_pwr = parts.get(2).and_then(|v| v.parse::<f32>().ok()).map(|f| f.round() as u16).unwrap_or(0);
-                let max_pwr = parts.get(3).and_then(|v| v.parse::<f32>().ok()).map(|f| f.round() as u16).unwrap_or(0);
+                let vram = parts.get(1).and_then(|v| parse_flexible_u64(v)).unwrap_or(8192);
+                let def_pwr = parts.get(2).and_then(|v| parse_flexible_f32(v)).map(|f| f.round() as u16).unwrap_or(0);
+                let max_pwr = parts.get(3).and_then(|v| parse_flexible_f32(v)).map(|f| f.round() as u16).unwrap_or(0);
                 return (name, vram, def_pwr, max_pwr);
             }
         }
@@ -765,26 +765,26 @@ impl GpuBridge {
                                     *n = name.to_string();
                                 }
                             }
-                            if let Ok(c) = parts[1].parse::<u32>() {
+                            if let Some(c) = parse_flexible_u32(parts[1]) {
                                 inner.core_freq.store(c, Ordering::SeqCst);
                             }
-                            if let Ok(m) = parts[2].parse::<u32>() {
+                            if let Some(m) = parse_flexible_u32(parts[2]) {
                                 inner.mem_freq.store(m, Ordering::SeqCst);
                             }
-                            if let Ok(t) = parts[3].parse::<u32>() {
+                            if let Some(t) = parse_flexible_u32(parts[3]) {
                                 inner.temp.store(t, Ordering::SeqCst);
                             }
-                            if let Ok(u) = parts[4].parse::<u32>() {
+                            if let Some(u) = parse_flexible_u32(parts[4]) {
                                 inner.usage.store(u, Ordering::SeqCst);
                             }
-                            if let Ok(v_tot) = parts[5].parse::<u64>() {
+                            if let Some(v_tot) = parse_flexible_u64(parts[5]) {
                                 inner.vram_mb.store(v_tot, Ordering::SeqCst);
                             }
-                            if let Ok(v_use) = parts[6].parse::<u64>() {
+                            if let Some(v_use) = parse_flexible_u64(parts[6]) {
                                 inner.vram_used_mb.store(v_use, Ordering::SeqCst);
                             }
                             if parts.len() >= 8 {
-                                if let Ok(p) = parts[7].parse::<f32>() {
+                                if let Some(p) = parse_flexible_f32(parts[7]) {
                                     let dw = (p * 10.0).round() as u32;
                                     inner.power_dw.store(dw, Ordering::SeqCst);
                                 }
@@ -832,9 +832,26 @@ impl GpuBridge {
         self.inner.vram_used_mb.load(Ordering::SeqCst)
     }
 
+    /// Validate offsets against driver-reported P0 ParamDelta bounds before writing.
+    fn offset_out_of_range(core: i32, mem: i32) -> Option<String> {
+        let ((cmin, cmax), (mmin, mmax)) =
+            crate::driver::nvapi::gpu_clock_offset_ranges_with_fallback_mhz();
+        if core < cmin || core > cmax {
+            return Some(format!("core offset {} MHz outside {}..{}", core, cmin, cmax));
+        }
+        if mem < mmin || mem > mmax {
+            return Some(format!("mem offset {} MHz outside {}..{}", mem, mmin, mmax));
+        }
+        None
+    }
+
     pub fn set_core_offset(&self, offset_mhz: i32) -> bool {
-        self.inner.core_offset.store(offset_mhz, Ordering::SeqCst);
         let mem = self.inner.mem_offset.load(Ordering::SeqCst);
+        if let Some(reason) = Self::offset_out_of_range(offset_mhz, mem) {
+            crate::log_warn!("GPU_BRIDGE", "Core offset rejected: {}", reason);
+            return false;
+        }
+        self.inner.core_offset.store(offset_mhz, Ordering::SeqCst);
         if let Err(e) = crate::driver::nvapi::set_gpu_clock_offsets(offset_mhz, mem) {
             crate::log_warn!("GPU_BRIDGE", "Failed to apply core offset {}MHz to NVAPI: {}", offset_mhz, e);
             false
@@ -844,8 +861,12 @@ impl GpuBridge {
     }
 
     pub fn set_mem_offset(&self, offset_mhz: i32) -> bool {
-        self.inner.mem_offset.store(offset_mhz, Ordering::SeqCst);
         let core = self.inner.core_offset.load(Ordering::SeqCst);
+        if let Some(reason) = Self::offset_out_of_range(core, offset_mhz) {
+            crate::log_warn!("GPU_BRIDGE", "Mem offset rejected: {}", reason);
+            return false;
+        }
+        self.inner.mem_offset.store(offset_mhz, Ordering::SeqCst);
         if let Err(e) = crate::driver::nvapi::set_gpu_clock_offsets(core, offset_mhz) {
             crate::log_warn!("GPU_BRIDGE", "Failed to apply mem offset {}MHz to NVAPI: {}", offset_mhz, e);
             false
@@ -855,6 +876,10 @@ impl GpuBridge {
     }
 
     pub fn set_clock_offsets(&self, core_offset_mhz: i32, mem_offset_mhz: i32) -> bool {
+        if let Some(reason) = Self::offset_out_of_range(core_offset_mhz, mem_offset_mhz) {
+            crate::log_warn!("GPU_BRIDGE", "Clock offsets rejected: {}", reason);
+            return false;
+        }
         self.inner.core_offset.store(core_offset_mhz, Ordering::SeqCst);
         self.inner.mem_offset.store(mem_offset_mhz, Ordering::SeqCst);
         if let Err(e) = crate::driver::nvapi::set_gpu_clock_offsets(core_offset_mhz, mem_offset_mhz) {
@@ -1092,6 +1117,59 @@ pub fn probe_gpu_tuning_capabilities() -> GpuTuningCapabilities {
         max_db_watts: m.max_db_w as u32,
         max_total_tgp: (m.base_max_w + m.max_db_w) as u32,
         is_pending: false,
+    }
+}
+
+/// Resilient numeric parser for nvidia-smi CSV values (handles both integer "45" and float "45.0"/"45.2" on 621+ drivers).
+pub fn parse_flexible_u32(s: &str) -> Option<u32> {
+    let s = s.trim();
+    if let Ok(v) = s.parse::<u32>() {
+        return Some(v);
+    }
+    s.parse::<f64>().ok().and_then(|f| {
+        if f.is_nan() || f.is_infinite() || f < 0.0 || f > (u32::MAX as f64) {
+            None
+        } else {
+            Some(f.round() as u32)
+        }
+    })
+}
+
+pub fn parse_flexible_u64(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if let Ok(v) = s.parse::<u64>() {
+        return Some(v);
+    }
+    s.parse::<f64>().ok().and_then(|f| {
+        if f.is_nan() || f.is_infinite() || f < 0.0 {
+            None
+        } else {
+            Some(f.round() as u64)
+        }
+    })
+}
+
+pub fn parse_flexible_f32(s: &str) -> Option<f32> {
+    let s = s.trim();
+    s.parse::<f32>()
+        .ok()
+        .filter(|f| !f.is_nan() && !f.is_infinite())
+}
+
+#[cfg(test)]
+mod flexible_parse_tests {
+    use super::*;
+
+    #[test]
+    fn parses_integer_and_floating_point_nvidia_smi_values() {
+        assert_eq!(parse_flexible_u32("45"), Some(45));
+        assert_eq!(parse_flexible_u32(" 45.0 "), Some(45));
+        assert_eq!(parse_flexible_u32("67.6"), Some(68));
+        assert_eq!(parse_flexible_u32("[N/A]"), None);
+        assert_eq!(parse_flexible_u32("-5.0"), None);
+        assert_eq!(parse_flexible_u64("12288.0"), Some(12288));
+        assert_eq!(parse_flexible_f32("124.75"), Some(124.75));
+        assert_eq!(parse_flexible_f32("NaN"), None);
     }
 }
 

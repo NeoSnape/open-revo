@@ -145,27 +145,6 @@ pub fn absorb_slow_sample(cache: &SharedStateCache, bytes: &[u8], rpm: &mut RpmF
 
     let gpu_rpm = (gpu_rpm_high << 8) | gpu_rpm_low;
     settle_fan_rpm(gpu_rpm, &mut rpm.gpu_stopped_reads, &mut c.gpu_fan_rpm);
-
-    // 5. Battery Gate Watchdog: Protect platform override from accidental drop (Tongfang platforms only)
-    if now >= c.battery_limit_cooldown_until {
-        let cfg_snap = crate::system::config::load_config();
-        if cfg_snap.battery_hardware_limit_enabled && c.battery_limit < 95 {
-            if let Some(cur_plat_id) = wmi_ec::wmi_read_ec(wmi_ec::ADDR_PLATFORM_REAL_ID) {
-                if cur_plat_id != 0x04 {
-                    crate::log_warn!(
-                        "EC_WATCHDOG",
-                        "Battery hardware gate dropped (platform code 0x{:02X})! Auto-healing platform override...",
-                        cur_plat_id
-                    );
-                    let _ = wmi_ec::wmi_write_ec(wmi_ec::ADDR_PLATFORM_REAL_ID, 0x04);
-                    let _ = wmi_ec::wmi_write_ec(wmi_ec::ADDR_BATTERY_PLATFORM_OVERRIDE, wmi_ec::BATTERY_OVERRIDE_RESET_VALUE);
-                    let _ = wmi_ec::wmi_write_ec(wmi_ec::ADDR_BATTERY_LIMIT_UP, c.battery_limit);
-                    let down = if c.battery_limit > 5 { c.battery_limit - 5 } else { c.battery_limit };
-                    let _ = wmi_ec::wmi_write_ec(wmi_ec::ADDR_BATTERY_LIMIT_DOWN, down);
-                }
-            }
-        }
-    }
 }
 
 impl EcBridge {

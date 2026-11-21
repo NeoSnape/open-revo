@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::ffi::CString;
+use std::sync::LazyLock;
+use std::time::Duration;
 use windows::core::PCSTR;
 use windows::Win32::Graphics::Gdi::{
     ChangeDisplaySettingsA, ChangeDisplaySettingsExA, EnumDisplayDevicesA, EnumDisplaySettingsA,
@@ -8,6 +10,52 @@ use windows::Win32::Graphics::Gdi::{
     DISPLAY_DEVICE_ATTACHED_TO_DESKTOP, DISPLAY_DEVICE_PRIMARY_DEVICE, DM_DISPLAYFREQUENCY,
     EDS_ROTATEDMODE, ENUM_CURRENT_SETTINGS, ENUM_DISPLAY_SETTINGS_MODE, ENUM_REGISTRY_SETTINGS,
 };
+
+use crate::system::query_cache::ExpiringCache;
+
+/// Full monitor + display-mode enumeration (~22 ms on a 210-mode panel) cached for 10 s.
+/// Invalidated immediately on refresh-rate changes and `WM_DISPLAYCHANGE`.
+static MONITORS_CACHE: LazyLock<ExpiringCache<Vec<DisplayMonitor>>> =
+    LazyLock::new(|| ExpiringCache::new(Duration::from_secs(10)));
+
+/// Primary display supported refresh-rate list cached for 10 s.
+static AVAILABLE_RATES_CACHE: LazyLock<ExpiringCache<Vec<u32>>> =
+    LazyLock::new(|| ExpiringCache::new(Duration::from_secs(10)));
+
+/// Invalidate cached display monitor / refresh-rate queries.
+/// Call after changing refresh rate/display mode and on `WM_DISPLAYCHANGE`.
+pub fn invalidate_display_cache() {
+    MONITORS_CACHE.invalidate();
+    AVAILABLE_RATES_CACHE.invalidate();
+}
+
+/// Lightweight active display device-name enumeration (`\\.\DISPLAY1`, etc.).
+/// Does NOT enumerate child monitors or `EnumDisplaySettings` refresh-rate matrices,
+/// making it safe for periodic background watchers (e.g. color calibration monitor).
+pub fn get_active_display_device_names() -> Vec<String> {
+    let mut names = Vec::new();
+    unsafe {
+        let mut dev_num = 0u32;
+        let mut adapter_dev: DISPLAY_DEVICEA = std::mem::zeroed();
+        adapter_dev.cb = std::mem::size_of::<DISPLAY_DEVICEA>() as u32;
+
+        while EnumDisplayDevicesA(None, dev_num, &mut adapter_dev, 0).as_bool() {
+            if (adapter_dev.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) != 0 {
+                let dev_name = cstr_to_string(&adapter_dev.DeviceName);
+                if !dev_name.is_empty() {
+                    names.push(dev_name);
+                }
+            }
+            adapter_dev = std::mem::zeroed();
+            adapter_dev.cb = std::mem::size_of::<DISPLAY_DEVICEA>() as u32;
+            dev_num += 1;
+        }
+    }
+    if names.is_empty() {
+        names.push("\\\\.\\DISPLAY1".into());
+    }
+    names
+}
 
 /// Information for an individual connected and active display monitor
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,8 +70,12 @@ pub struct DisplayMonitor {
     pub supported_rates: Vec<u32>,     // Supported refresh rates at current resolution (e.g. [60, 240])
 }
 
-/// Enumerate all active displays and their supported refresh rate matrix
+/// Enumerate all active displays and their supported refresh rate matrix (10 s TTL cached).
 pub fn get_all_monitors() -> Vec<DisplayMonitor> {
+    MONITORS_CACHE.get_or_compute(probe_all_monitors_uncached)
+}
+
+fn probe_all_monitors_uncached() -> Vec<DisplayMonitor> {
     let mut monitors = Vec::new();
 
     unsafe {
@@ -236,6 +288,7 @@ pub fn set_monitor_refresh_rate(device_name: &str, hz: u32) -> Result<(), String
             if res.0 == 0 {
                 // Notify Desktop Window Manager to re-evaluate and apply desktop layout
                 let _ = ChangeDisplaySettingsExA(None, None, None, CDS_TYPE(0), None);
+                invalidate_display_cache();
                 return Ok(());
             }
             return Err(format!(
@@ -381,6 +434,7 @@ pub fn set_refresh_rate(hz: u32) -> Result<(), String> {
 
             let res = ChangeDisplaySettingsA(Some(&dm), CDS_UPDATEREGISTRY);
             if res.0 == 0 {
+                invalidate_display_cache();
                 return Ok(());
             }
             return Err(format!("ChangeDisplaySettings failed with code: {}", res.0));
@@ -400,6 +454,7 @@ pub fn set_refresh_rate_temporary(hz: u32) -> Result<(), String> {
             dm.dmFields |= DM_DISPLAYFREQUENCY;
             let res = ChangeDisplaySettingsA(Some(&dm), windows::Win32::Graphics::Gdi::CDS_TYPE(0));
             if res.0 == 0 {
+                invalidate_display_cache();
                 return Ok(());
             }
             return Err(format!("ChangeDisplaySettings failed with code: {}", res.0));
@@ -412,14 +467,19 @@ pub fn set_refresh_rate_temporary(hz: u32) -> Result<(), String> {
 pub fn reset_display_mode_to_registry() -> Result<(), String> {
     let res = unsafe { ChangeDisplaySettingsA(None, windows::Win32::Graphics::Gdi::CDS_TYPE(0)) };
     if res.0 == 0 {
+        invalidate_display_cache();
         Ok(())
     } else {
         Err(format!("ChangeDisplaySettings(reset) failed with code: {}", res.0))
     }
 }
 
-/// Enumerate all available refresh rates supported on primary display
+/// Enumerate all available refresh rates supported on primary display (10 s TTL cached).
 pub fn get_available_refresh_rates() -> Vec<u32> {
+    AVAILABLE_RATES_CACHE.get_or_compute(probe_available_refresh_rates_uncached)
+}
+
+fn probe_available_refresh_rates_uncached() -> Vec<u32> {
     unsafe {
         let mut dm_curr: DEVMODEA = std::mem::zeroed();
         dm_curr.dmSize = std::mem::size_of::<DEVMODEA>() as u16;
@@ -530,7 +590,25 @@ pub fn get_brightness() -> Result<u8, String> {
         CloseHandle(h as *mut std::ffi::c_void);
 
         if ok != 0 {
-            let val = data.uc_ac_brightness.max(data.uc_dc_brightness).min(100);
+            let val = match data.uc_display_policy {
+                1 => data.uc_ac_brightness,
+                2 => data.uc_dc_brightness,
+                _ => {
+                    let mut pwr = windows::Win32::System::Power::SYSTEM_POWER_STATUS::default();
+                    if windows::Win32::System::Power::GetSystemPowerStatus(&mut pwr).is_ok() {
+                        if pwr.ACLineStatus == 1 {
+                            data.uc_ac_brightness
+                        } else if pwr.ACLineStatus == 0 {
+                            data.uc_dc_brightness
+                        } else {
+                            data.uc_ac_brightness.max(data.uc_dc_brightness)
+                        }
+                    } else {
+                        data.uc_ac_brightness.max(data.uc_dc_brightness)
+                    }
+                }
+            }
+            .min(100);
             Ok(val)
         } else {
             Err("IOCTL_VIDEO_QUERY_DISPLAY_BRIGHTNESS failed".into())

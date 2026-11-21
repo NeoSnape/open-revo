@@ -77,6 +77,32 @@ export default function App() {
     power_mode?: { val: PowerMode; expiry: number };
   }>({});
 
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setWindowVisibleRef = useRef<((visible: boolean, immediate?: boolean) => void) | null>(null);
+
+  const showToast = useCallback((message: string) => {
+    const text = message.trim();
+    if (!text) return;
+    setToastMessage(text);
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null);
+      toastTimerRef.current = null;
+    }, 3500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    };
+  }, []);
+
   // Global root synchronization: Penetrate all Portals, Modals and Tooltips
   useEffect(() => {
     const docEl = document.documentElement;
@@ -111,11 +137,69 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let disposed = false;
+    let windowVisible = document.visibilityState !== 'hidden';
+    let visibilitySyncedByEvent = false;
+    let fallbackTimer: ReturnType<typeof setInterval> | null = null;
+    let lastImmediateFetchAt = 0;
+
+    const stopFallbackPolling = () => {
+      if (fallbackTimer) {
+        clearInterval(fallbackTimer);
+        fallbackTimer = null;
+      }
+    };
+
+    const startFallbackPolling = () => {
+      if (!disposed && !fallbackTimer) {
+        fallbackTimer = setInterval(fetchStatus, 10000);
+      }
+    };
+
+    const applyVisibility = (visible: boolean, fetchImmediately = false, fromEvent = true) => {
+      if (disposed) return;
+      if (fromEvent) {
+        visibilitySyncedByEvent = true;
+      } else if (visibilitySyncedByEvent) {
+        return;
+      }
+      const wasVisible = windowVisible;
+      windowVisible = visible;
+      if (visible) {
+        const now = Date.now();
+        if ((fetchImmediately || !wasVisible) && now - lastImmediateFetchAt > 250) {
+          lastImmediateFetchAt = now;
+          fetchStatus();
+        }
+        startFallbackPolling();
+      } else {
+        stopFallbackPolling();
+      }
+    };
+
+    setWindowVisibleRef.current = (visible, immediate = false) =>
+      applyVisibility(visible, immediate, true);
+
+    const registerUnlisten = (
+      promise: Promise<() => void>,
+      setter: (fn: () => void) => void
+    ) => {
+      promise
+        .then((fn) => {
+          if (disposed) {
+            fn();
+          } else {
+            setter(fn);
+          }
+        })
+        .catch(() => {});
+    };
+
     // Initial sync from persistent config on boot
     const bootSync = async () => {
       try {
         const cfg = await invoke<any>('get_app_config');
-        if (cfg) {
+        if (!disposed && cfg) {
           setHardwareState((prev) => ({
             ...prev,
             power_mode: cfg.power_mode,
@@ -131,48 +215,59 @@ export default function App() {
         }
       } catch (_) {}
 
+      let initiallyVisible = document.visibilityState !== 'hidden';
+      try {
+        const win = getCurrentWindow();
+        const [vis, min] = await Promise.all([win.isVisible(), win.isMinimized()]);
+        initiallyVisible = vis && !min && document.visibilityState !== 'hidden';
+      } catch (_) {}
+
       try {
         await invoke('frontend_ready');
-        await invoke('report_window_visibility', { visible: true });
+        if (!disposed && !visibilitySyncedByEvent) {
+          await invoke('report_window_visibility', { visible: initiallyVisible });
+        }
       } catch (_) {}
-      fetchStatus();
+
+      if (!disposed && !visibilitySyncedByEvent) {
+        applyVisibility(initiallyVisible, initiallyVisible, false);
+      }
     };
     bootSync();
 
     // Liveness ping from the tray click; no answer means the WebView died and the backend relaunches.
     let unlistenPing: (() => void) | undefined;
-    listen<number>('ui-ping', (event) => {
-      invoke('ui_pong', { seq: event.payload }).catch(() => {});
-    }).then((un) => {
-      unlistenPing = un;
-    }).catch(() => {});
+    registerUnlisten(
+      listen<number>('ui-ping', (event) => {
+        invoke('ui_pong', { seq: event.payload }).catch(() => {});
+      }),
+      (un) => { unlistenPing = un; }
+    );
 
     // Responsive hardware state event bus subscription (zero polling overhead)
     let unlistenTelemetry: (() => void) | undefined;
-    listen<HardwareState>('hardware-state-updated', (event) => {
-      const state = event.payload;
-      const now = Date.now();
-      const lock = overrideLockRef.current;
-      setHardwareState((_prev) => {
-        let merged = { ...state };
-        if (lock.fan_boost && now < lock.fan_boost.expiry) {
-          merged.fan_boost = lock.fan_boost.val;
-        }
-        if (lock.battery_limit && now < lock.battery_limit.expiry) {
-          merged.battery_limit = lock.battery_limit.val;
-        }
-        if (lock.power_mode && now < lock.power_mode.expiry) {
-          merged.power_mode = lock.power_mode.val;
-        }
-        return merged;
-      });
-      setIsTauriEnv(true);
-    }).then((un) => {
-      unlistenTelemetry = un;
-    }).catch(() => {});
-
-    // Slow fallback watchdog timer (10s) just in case event stream is quiet
-    const timer = setInterval(fetchStatus, 10000);
+    registerUnlisten(
+      listen<HardwareState>('hardware-state-updated', (event) => {
+        const state = event.payload;
+        const now = Date.now();
+        const lock = overrideLockRef.current;
+        setHardwareState((_prev) => {
+          let merged = { ...state };
+          if (lock.fan_boost && now < lock.fan_boost.expiry) {
+            merged.fan_boost = lock.fan_boost.val;
+          }
+          if (lock.battery_limit && now < lock.battery_limit.expiry) {
+            merged.battery_limit = lock.battery_limit.val;
+          }
+          if (lock.power_mode && now < lock.power_mode.expiry) {
+            merged.power_mode = lock.power_mode.val;
+          }
+          return merged;
+        });
+        setIsTauriEnv(true);
+      }),
+      (un) => { unlistenTelemetry = un; }
+    );
 
     // Strictly synchronize layout mode with explicit window events or large width
     // Converts physical pixels to logical pixels via scaleFactor on High-DPI screens
@@ -196,7 +291,9 @@ export default function App() {
     let unlistenReset: (() => void) | undefined;
     let unlistenSyncMode: (() => void) | undefined;
     let unlistenFocus: (() => void) | undefined;
+    let unlistenVisibility: (() => void) | undefined;
     let unlistenMode: (() => void) | undefined;
+    let unlistenModeRejected: (() => void) | undefined;
     let unlistenFan: (() => void) | undefined;
     let unlistenWinLock: (() => void) | undefined;
     let unlistenDcStatus: (() => void) | undefined;
@@ -204,100 +301,137 @@ export default function App() {
     let unlistenGpuLimits: (() => void) | undefined;
     let unlistenPowerPresets: (() => void) | undefined;
 
-    listen('gpu-power-limits-ready', () => {
-      fetchStatus();
-    }).then((fn) => {
-      unlistenGpuLimits = fn;
-    }).catch(() => {});
+    registerUnlisten(
+      listen<boolean>('window-visibility-changed', (event) => {
+        const vis = Boolean(event.payload);
+        applyVisibility(vis, vis);
+      }),
+      (fn) => { unlistenVisibility = fn; }
+    );
 
-    listen<any>('factory-power-presets-ready', (event) => {
-      if (event.payload) {
-        setHardwareState((prev) => ({
-          ...prev,
-          power_presets: event.payload,
-        }));
-      }
-    }).then((fn) => {
-      unlistenPowerPresets = fn;
-    }).catch(() => {});
+    registerUnlisten(
+      listen<string>('power-mode-rejected', (event) => {
+        const msg = typeof event.payload === 'string' ? event.payload : String(event.payload ?? '');
+        if (msg) {
+          overrideLockRef.current.power_mode = undefined;
+          showToast(msg);
+          fetchStatus();
+        }
+      }),
+      (fn) => { unlistenModeRejected = fn; }
+    );
+
+    registerUnlisten(
+      listen('gpu-power-limits-ready', () => {
+        if (windowVisible) {
+          fetchStatus();
+        }
+      }),
+      (fn) => { unlistenGpuLimits = fn; }
+    );
+
+    registerUnlisten(
+      listen<any>('factory-power-presets-ready', (event) => {
+        if (event.payload) {
+          setHardwareState((prev) => ({
+            ...prev,
+            power_presets: event.payload,
+          }));
+        }
+      }),
+      (fn) => { unlistenPowerPresets = fn; }
+    );
 
     try {
       const win = getCurrentWindow();
-      win.listen('reset-to-mini', async () => {
-        let logicalWidth = window.innerWidth;
-        try {
-          const sz = await win.innerSize();
-          const scale = await win.scaleFactor();
-          if (scale > 0 && sz.width > 0) {
-            logicalWidth = sz.width / scale;
+      registerUnlisten(
+        win.listen('reset-to-mini', async () => {
+          let logicalWidth = window.innerWidth;
+          try {
+            const sz = await win.innerSize();
+            const scale = await win.scaleFactor();
+            if (scale > 0 && sz.width > 0) {
+              logicalWidth = sz.width / scale;
+            }
+          } catch (_) {}
+          // If window is currently large (>= 650px logical), refuse to collapse to mini
+          if (logicalWidth >= 650) {
+            setIsExpanded(true);
+            return;
           }
-        } catch (_) {}
-        // If window is currently large (>= 650px logical), refuse to collapse to mini
-        if (logicalWidth >= 650) {
-          setIsExpanded(true);
-          return;
-        }
-        setIsExpanded(false);
-      }).then((fn) => {
-        unlistenReset = fn;
-      });
+          setIsExpanded(false);
+        }),
+        (fn) => { unlistenReset = fn; }
+      );
 
-      win.listen<boolean>('sync-window-mode', (event) => {
-        setIsExpanded(event.payload);
-      }).then((fn) => {
-        unlistenSyncMode = fn;
-      });
+      registerUnlisten(
+        win.listen<boolean>('sync-window-mode', (event) => {
+          setIsExpanded(event.payload);
+        }),
+        (fn) => { unlistenSyncMode = fn; }
+      );
 
-      win.listen('tauri://focus', () => {
-        syncModeWithWindowSize();
-        fetchStatus();
-        invoke('report_window_visibility', { visible: true }).catch(() => {});
-      }).then((fn) => {
-        unlistenFocus = fn;
-      });
+      registerUnlisten(
+        win.listen('tauri://focus', () => {
+          syncModeWithWindowSize();
+          applyVisibility(true, true);
+          invoke('report_window_visibility', { visible: true }).catch(() => {});
+        }),
+        (fn) => { unlistenFocus = fn; }
+      );
 
-      listen<number>('physical-mode-switched', (event) => {
-        const nextMode = event.payload as PowerMode;
-        console.log('[Hardware Key] Mode switched by chassis Q-Key to:', nextMode);
-        overrideLockRef.current.power_mode = { val: nextMode, expiry: Date.now() + 5000 };
-        setHardwareState((prev) => ({ ...prev, power_mode: nextMode }));
-      }).then((fn) => {
-        unlistenMode = fn;
-      });
+      registerUnlisten(
+        listen<number>('physical-mode-switched', (event) => {
+          const nextMode = event.payload as PowerMode;
+          console.log('[Hardware Key] Mode switched by chassis Q-Key to:', nextMode);
+          overrideLockRef.current.power_mode = { val: nextMode, expiry: Date.now() + 5000 };
+          setHardwareState((prev) => ({ ...prev, power_mode: nextMode }));
+        }),
+        (fn) => { unlistenMode = fn; }
+      );
 
-      listen<boolean>('physical-fan-boost-switched', (event) => {
-        const nextFan = event.payload;
-        console.log('[Hardware Key] Fan Boost switched by chassis Q-Key to:', nextFan);
-        overrideLockRef.current.fan_boost = { val: nextFan, expiry: Date.now() + 4000 };
-        setHardwareState((prev) => ({
-          ...prev,
-          fan_boost: nextFan,
-        }));
-      }).then((fn) => {
-        unlistenFan = fn;
-      });
+      registerUnlisten(
+        listen<boolean>('physical-fan-boost-switched', (event) => {
+          const nextFan = event.payload;
+          console.log('[Hardware Key] Fan Boost switched by chassis Q-Key to:', nextFan);
+          overrideLockRef.current.fan_boost = { val: nextFan, expiry: Date.now() + 4000 };
+          setHardwareState((prev) => ({
+            ...prev,
+            fan_boost: nextFan,
+          }));
+        }),
+        (fn) => { unlistenFan = fn; }
+      );
 
-      listen<boolean>('win-lock-state-changed', (event) => {
-        console.log('[Hardware Watcher] Win lock state changed to:', event.payload);
-        setHardwareState((prev) => ({ ...prev, win_key_locked: event.payload }));
-      }).then((fn) => {
-        unlistenWinLock = fn;
-      });
+      registerUnlisten(
+        listen<boolean>('win-lock-state-changed', (event) => {
+          console.log('[Hardware Watcher] Win lock state changed to:', event.payload);
+          setHardwareState((prev) => ({ ...prev, win_key_locked: event.payload }));
+        }),
+        (fn) => { unlistenWinLock = fn; }
+      );
 
-      listen<boolean>('unlock-battery-power-limit-changed', (event) => {
-        console.log('[Hardware Watcher] Unlock battery power limit changed to:', event.payload);
-        setHardwareState((prev) => ({ ...prev, unlock_battery_power_limit: event.payload }));
-      }).then((fn) => {
-        unlistenUnlockBattery = fn;
-      });
+      registerUnlisten(
+        listen<boolean>('unlock-battery-power-limit-changed', (event) => {
+          console.log('[Hardware Watcher] Unlock battery power limit changed to:', event.payload);
+          setHardwareState((prev) => ({ ...prev, unlock_battery_power_limit: event.payload }));
+        }),
+        (fn) => { unlistenUnlockBattery = fn; }
+      );
 
-      listen<boolean>('dc-status-changed', (event) => {
-        console.log('[Hardware Watcher] DC power state changed to:', event.payload);
-        setHardwareState((prev) => ({ ...prev, is_dc_online: event.payload }));
-      }).then((fn) => {
-        unlistenDcStatus = fn;
-      });
+      registerUnlisten(
+        listen<boolean>('dc-status-changed', (event) => {
+          console.log('[Hardware Watcher] DC power state changed to:', event.payload);
+          setHardwareState((prev) => ({ ...prev, is_dc_online: event.payload }));
+        }),
+        (fn) => { unlistenDcStatus = fn; }
+      );
     } catch (_) {}
+
+    const handleVisibilityChange = () => {
+      const vis = document.visibilityState !== 'hidden';
+      applyVisibility(vis, vis);
+    };
 
     // Prevent browser default refresh (F5 / Ctrl+R) from breaking window layout
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -306,30 +440,36 @@ export default function App() {
         e.stopPropagation();
       }
     };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('resize', syncModeWithWindowSize);
     window.addEventListener('focus', syncModeWithWindowSize);
     syncModeWithWindowSize();
 
     return () => {
-      clearInterval(timer);
+      disposed = true;
+      setWindowVisibleRef.current = null;
+      stopFallbackPolling();
       if (unlistenPing) unlistenPing();
       if (unlistenTelemetry) unlistenTelemetry();
       if (unlistenReset) unlistenReset();
       if (unlistenSyncMode) unlistenSyncMode();
       if (unlistenFocus) unlistenFocus();
+      if (unlistenVisibility) unlistenVisibility();
       if (unlistenMode) unlistenMode();
+      if (unlistenModeRejected) unlistenModeRejected();
       if (unlistenFan) unlistenFan();
       if (unlistenWinLock) unlistenWinLock();
       if (unlistenDcStatus) unlistenDcStatus();
       if (unlistenUnlockBattery) unlistenUnlockBattery();
       if (unlistenGpuLimits) unlistenGpuLimits();
       if (unlistenPowerPresets) unlistenPowerPresets();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('resize', syncModeWithWindowSize);
       window.removeEventListener('focus', syncModeWithWindowSize);
     };
-  }, [fetchStatus]);
+  }, [fetchStatus, showToast]);
 
   // Power mode
   const handleSetPowerMode = async (mode: PowerMode) => {
@@ -342,6 +482,7 @@ export default function App() {
         // Refused (e.g. Beast/Custom on battery): stop showing the mode that was not applied.
         console.error('Failed to set power mode:', e);
         overrideLockRef.current.power_mode = { val: mode, expiry: 0 };
+        showToast(String(e));
         fetchStatus();
       }
     }
@@ -476,6 +617,7 @@ export default function App() {
   };
 
   const handleMinimize = async () => {
+    setWindowVisibleRef.current?.(false, false);
     if (isTauriEnv) {
       try {
         const win = getCurrentWindow();
@@ -489,6 +631,7 @@ export default function App() {
 
   const handleClose = async () => {
     setOpenCustomTuning(false);
+    setWindowVisibleRef.current?.(false, false);
     if (isTauriEnv) {
       try {
         const win = getCurrentWindow();
@@ -544,6 +687,11 @@ export default function App() {
           onMinimize={handleMinimize}
           onClose={handleClose}
         />
+      )}
+      {toastMessage && (
+        <div className="app-toast" role="status" aria-live="polite">
+          {toastMessage}
+        </div>
       )}
     </div>
   );

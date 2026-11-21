@@ -40,7 +40,8 @@ pub fn check_igpu_present() -> bool {
 pub fn get_gpu_mode_info(
     gpu_state: State<'_, SharedGpuBridge>,
 ) -> GpuModeInfo {
-    let mut cfg = crate::system::config::load_config();
+    let cfg = crate::system::config::load_config();
+    let initial_gpu_mode = cfg.gpu_mode.clone();
     let hw = crate::driver::uefi_nvram::read_gpu_mode();
     let capabilities = crate::driver::uefi_nvram::probe_gpu_capabilities();
     let has_igpu = check_igpu_present();
@@ -50,13 +51,18 @@ pub fn get_gpu_mode_info(
     let effective_mode = if !has_dgpu {
         "igpu".to_string()
     } else if hw.hardware_read && hw.current_mode != "unknown" {
-        if cfg.gpu_mode != hw.current_mode {
-            cfg.gpu_mode = hw.current_mode.clone();
-            crate::system::config::modify_config(|c| c.gpu_mode = cfg.gpu_mode.clone());
+        if initial_gpu_mode != hw.current_mode {
+            let hw_mode = hw.current_mode.clone();
+            crate::system::config::modify_config(|c| {
+                // Only sync if no concurrent `set_gpu_mode` changed it during the slow NVRAM read (H4).
+                if c.gpu_mode == initial_gpu_mode {
+                    c.gpu_mode = hw_mode;
+                }
+            });
         }
         hw.current_mode.clone()
     } else {
-        cfg.gpu_mode.clone()
+        initial_gpu_mode
     };
 
     GpuModeInfo {
@@ -225,15 +231,6 @@ pub fn get_custom_profile() -> crate::system::config::CustomProfileConfig {
         }
     }
     cfg.custom_profile
-}
-
-#[tauri::command]
-pub fn reset_custom_profile_to_defaults() -> crate::system::config::CustomProfileConfig {
-    let mut cfg = crate::system::config::load_config();
-    let model_default = crate::system::model_engine::get_model_default_custom_profile();
-    cfg.custom_profile = model_default.clone();
-    crate::system::config::modify_config(|c| c.custom_profile = cfg.custom_profile.clone());
-    model_default
 }
 
 #[tauri::command]
@@ -827,11 +824,6 @@ pub fn emergency_hard_unlock_gpu() -> Result<crate::system::actuator::UnifiedGpu
 #[tauri::command]
 pub fn get_gpu_tuning_capabilities() -> crate::driver::gpu_bridge::GpuTuningCapabilities {
     crate::driver::gpu_bridge::probe_gpu_tuning_capabilities()
-}
-
-#[tauri::command]
-pub fn get_bios_advanced_menu_status() -> crate::driver::uefi_nvram::BiosMenuStatus {
-    crate::driver::uefi_nvram::read_bios_advanced_menu_status()
 }
 
 #[tauri::command]

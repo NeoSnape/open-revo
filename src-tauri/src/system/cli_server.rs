@@ -91,8 +91,13 @@ fn status(app: &AppHandle, args: &Value) -> Value {
             0.0
         }
     };
+    let selected_id = crate::system::mode::selected();
+    let mode_override = crate::system::mode::active_override().map(|(k, _)| k.label());
     json!({
-        "mode": mode_name(s.power_mode), "mode_id": s.power_mode, "custom_profile": profile,
+        "mode": mode_name(s.power_mode), "mode_id": s.power_mode,
+        "selected_mode": mode_name(selected_id), "selected_mode_id": selected_id,
+        "mode_override": mode_override,
+        "custom_profile": profile,
         "fan_boost": s.fan_boost, "fan_policy": cfg.preset_fan_policy,
         "fan_table": fan.state, "fan_table_source": fan.source,
         "cpu": { "temp_c": s.cpu_temp, "power_w": round1(s.cpu_power_w), "freq_mhz": s.cpu_freq, "usage_pct": s.cpu_usage },
@@ -154,11 +159,10 @@ fn dispatch(app: &AppHandle, cmd: &str, args: &Value, client_elevated: bool) -> 
     };
     match cmd {
         "ping" => Ok(json!({ "version": env!("CARGO_PKG_VERSION"), "pid": std::process::id() })),
-        "catalog" => Ok(serde_json::from_str(catalog::COMMAND_CATALOG).unwrap_or(Value::Null)),
+        "catalog" => Ok(parsed_catalog().clone()),
         "invoke" => {
             let command = arg_str(args, "command")?.to_string();
-            let known: Value = serde_json::from_str(catalog::COMMAND_CATALOG).unwrap_or(Value::Null);
-            let entry = known
+            let entry = parsed_catalog()
                 .as_array()
                 .and_then(|a| a.iter().find(|c| c["name"] == command))
                 .ok_or_else(|| format!("unknown command '{}' (see `orv commands`)", command))?;
@@ -304,6 +308,11 @@ fn dispatch(app: &AppHandle, cmd: &str, args: &Value, client_elevated: bool) -> 
 
 mod catalog {
     include!(concat!(env!("OUT_DIR"), "/command_catalog.rs"));
+}
+
+fn parsed_catalog() -> &'static Value {
+    static CATALOG: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    CATALOG.get_or_init(|| serde_json::from_str(catalog::COMMAND_CATALOG).unwrap_or(Value::Null))
 }
 
 /// Run a registered IPC command exactly as the panel's `invoke()` would: same argument

@@ -71,6 +71,10 @@ impl Mapping {
         unsafe { (self.base().add(off) as *const u32).read_volatile() }
     }
 
+    fn is_valid(&self) -> bool {
+        self.u32_at(OFF_SIGNATURE) == RTSS_SIGNATURE && self.u32_at(OFF_VERSION) >= 0x0002_0000
+    }
+
     fn version(&self) -> u32 {
         self.u32_at(OFF_VERSION)
     }
@@ -271,34 +275,67 @@ fn build_text(ec: &crate::driver::ec_bridge::SharedEcBridge, gpu: &crate::driver
 }
 
 /// Background feeder: 1 Hz while RTSS runs and a 3D app is hooked, idle otherwise.
+/// Keeps the RTSS shared-memory view mapped while valid instead of reopening/unmapping every second.
 pub fn start(ec: crate::driver::ec_bridge::SharedEcBridge, gpu: crate::driver::gpu_bridge::SharedGpuBridge) {
     std::thread::Builder::new()
         .name("openrevo-rtss-osd".into())
         .spawn(move || {
             let mut logged_attach = false;
+            let mut mapping: Option<Mapping> = None;
             loop {
-                std::thread::sleep(Duration::from_millis(1000));
-                let Some(map) = Mapping::open() else {
+                let enabled = crate::system::config::with_config(|c| c.rtss_osd_enabled);
+                if !enabled {
+                    if SLOT_HELD.swap(false, Ordering::SeqCst) {
+                        if let Some(ref map) = mapping {
+                            if map.is_valid() {
+                                map.release();
+                            }
+                        }
+                    }
+                    mapping = None;
+                    logged_attach = false;
+                    std::thread::sleep(Duration::from_millis(3000));
+                    continue;
+                }
+
+                // Drop stale view if RTSS exited and cleared the shared-memory signature.
+                if mapping.as_ref().is_some_and(|m| !m.is_valid()) {
+                    mapping = None;
                     SLOT_HELD.store(false, Ordering::SeqCst);
                     logged_attach = false;
-                    std::thread::sleep(Duration::from_millis(4000));
+                }
+
+                if mapping.is_none() {
+                    mapping = Mapping::open();
+                }
+
+                let Some(ref map) = mapping else {
+                    SLOT_HELD.store(false, Ordering::SeqCst);
+                    logged_attach = false;
+                    std::thread::sleep(Duration::from_millis(5000));
                     continue;
                 };
-                let enabled = crate::system::config::load_config().rtss_osd_enabled;
-                if !enabled || !map.any_3d_app() {
+
+                if !map.any_3d_app() {
                     if SLOT_HELD.swap(false, Ordering::SeqCst) {
                         map.release();
                     }
+                    std::thread::sleep(Duration::from_millis(2000));
                     continue;
                 }
+
                 crate::driver::gpu_bridge::GpuBridge::request_telemetry(3000);
                 if map.update(&build_text(&ec, &gpu)) {
-                    SLOT_HELD.store(true, Ordering::SeqCst);
+                    // Publish SLOT_HELD before waking cpu_monitor so it sees `is_feeding() == true`.
+                    if !SLOT_HELD.swap(true, Ordering::SeqCst) {
+                        crate::system::cpu_monitor::wake_cpu_monitor();
+                    }
                     if !logged_attach {
                         crate::log_info!("RTSS_OSD", "Feeding OpenRevo sensors into RTSS OSD (shared memory v{:X})", map.version());
                         logged_attach = true;
                     }
                 }
+                std::thread::sleep(Duration::from_millis(1000));
             }
         })
         .ok();

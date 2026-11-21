@@ -171,8 +171,6 @@ fn lock_key_worker(app: AppHandle, rx: std::sync::mpsc::Receiver<u16>) {
         let announce = |val: bool| {
             crate::system::osd_window::wake_osd_if_enabled(&app);
             let _ = app.emit(event, val);
-            let _ = app.emit_to("main", event, val);
-            let _ = app.emit_to("osd", event, val);
         };
         // Invert immediately for instant visual feedback, then verify against the real key state.
         let new_val = !state.load(Ordering::Relaxed);

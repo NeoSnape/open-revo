@@ -30,4 +30,5 @@ pub mod webview_health;
 pub mod cli_server;
 pub mod ec_sampler;
 pub mod mode;
+pub mod query_cache;
 pub mod screen_blank;

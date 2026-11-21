@@ -1,4 +1,3 @@
-import React from 'react';
 import {
   Gauge,
   Cpu,
@@ -18,12 +17,9 @@ export interface ModelCapabilities {
   form_factor?: 'thin_light' | 'gaming' | 'mini_pc' | string;
   ui_preset?: string;
   discrete_gpu?: boolean;
-  water_cooling?: boolean;
   fan_custom_curve?: boolean;
   fan_independent_channels?: boolean;
   fan_ramp_rate?: boolean;
-  fan_control_mode?: 'discrete_table_16' | 'direct_rpm_clamp' | 'fixed_boost_only' | 'none' | string;
-  fan_boost_mode?: 'hardware_toggle' | 'direct_rpm_clamp' | string;
   max_fan_rpm?: number;
   cpu_vendor?: 'amd' | 'intel' | string;
   cpu_tuning_type?: 'intel_pl' | 'amd_smu' | 'none' | string;
@@ -68,10 +64,6 @@ export interface BuiltinModuleSlot {
    * 是否在导航栏渲染该模块
    */
   isVisible: (ctx: ModuleSlotContext) => boolean;
-  /**
-   * 导航栏角标或指示状态（如水冷魔盒未连接/连接指示点）
-   */
-  renderBadge?: (ctx: ModuleSlotContext) => React.ReactNode;
 }
 
 export const BUILTIN_MODULE_SLOTS: BuiltinModuleSlot[] = [

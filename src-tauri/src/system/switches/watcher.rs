@@ -103,8 +103,6 @@ pub fn start_hardware_state_watcher(
                     use tauri::Emitter;
                     crate::system::osd_window::wake_osd_if_enabled(&app);
                     let _ = app.emit("win-lock-state-changed", current_win);
-                    let _ = app.emit_to("main", "win-lock-state-changed", current_win);
-                    let _ = app.emit_to("osd", "win-lock-state-changed", current_win);
                 } else {
                     crate::log_debug!("DEVICE_SWITCH", "Win Key lock rapid transition suppressed by debounce (<180ms)");
                 }
@@ -122,8 +120,6 @@ pub fn start_hardware_state_watcher(
                             use tauri::Emitter;
                             crate::system::osd_window::wake_osd_if_enabled(&app);
                             let _ = app.emit("fn-lock-state-changed", current_fn);
-                            let _ = app.emit_to("main", "fn-lock-state-changed", current_fn);
-                            let _ = app.emit_to("osd", "fn-lock-state-changed", current_fn);
                         } else {
                             crate::log_debug!("DEVICE_SWITCH", "Fn Lock rapid transition suppressed by debounce (<180ms)");
                         }
@@ -169,15 +165,18 @@ pub fn start_hardware_state_watcher(
             // Slow Track: Heavy peripherals (Bluetooth, Wi-Fi, Camera, Mic, AC/DC)
             tick_count = tick_count.wrapping_add(1);
             let slow_mod = 2; // ~500 ms
-            if tick_count % slow_mod != 0 {
+            if !tick_count.is_multiple_of(slow_mod) {
                 continue;
             }
 
-            // Peripheral states only mirror the UI toggles. Every 5 s, not every slow tick: the camera
-            // probe spawns pnputil.exe and the Bluetooth probe walks WinRT radios, ~2.5% of a core at 0.5 s.
-            if tick_count % 20 == 0 {
-                // 1. Watch Bluetooth
-                if let Some(current_bt) = super::radio::get_native_bluetooth_radio_state() {
+            // Peripheral states only mirror the UI toggles. Skip while screen-blanked; poll every 5 s
+            // while the panel is visible, and throttle to every 30 s when hidden (avoids spawning
+            // pnputil.exe ~17,280 times/day while idle).
+            let periph_mod = if crate::system::telemetry::is_telemetry_active() { 20 } else { 120 };
+            if !crate::system::screen_blank::is_active() && tick_count.is_multiple_of(periph_mod) {
+                // 1-2. Watch Bluetooth & Wi-Fi in a single WinRT GetRadiosAsync() query
+                let (bt_state, wifi_state) = super::radio::get_bt_and_wifi_states();
+                if let Some(current_bt) = bt_state {
                     if last_bt != Some(current_bt) {
                         crate::log_info!("DEVICE_SWITCH", "External Bluetooth state change: {:?} -> {}", last_bt, current_bt);
                         last_bt = Some(current_bt);
@@ -185,13 +184,10 @@ pub fn start_hardware_state_watcher(
                         use tauri::Emitter;
                         crate::system::osd_window::wake_osd_if_enabled(&app);
                         let _ = app.emit("bluetooth-state-changed", current_bt);
-                        let _ = app.emit_to("main", "bluetooth-state-changed", current_bt);
-                        let _ = app.emit_to("osd", "bluetooth-state-changed", current_bt);
                     }
                 }
 
-                // 2. Watch Wi-Fi
-                if let Some(current_wifi) = super::radio::get_realtime_wifi_state() {
+                if let Some(current_wifi) = wifi_state {
                     if last_wifi != Some(current_wifi) {
                         crate::log_info!("DEVICE_SWITCH", "External Wi-Fi state change: {:?} -> {}", last_wifi, current_wifi);
                         last_wifi = Some(current_wifi);
@@ -199,8 +195,6 @@ pub fn start_hardware_state_watcher(
                         use tauri::Emitter;
                         crate::system::osd_window::wake_osd_if_enabled(&app);
                         let _ = app.emit("wifi-state-changed", current_wifi);
-                        let _ = app.emit_to("main", "wifi-state-changed", current_wifi);
-                        let _ = app.emit_to("osd", "wifi-state-changed", current_wifi);
                     }
                 }
 
@@ -213,8 +207,6 @@ pub fn start_hardware_state_watcher(
                     use tauri::Emitter;
                     crate::system::osd_window::wake_osd_if_enabled(&app);
                     let _ = app.emit("camera-state-changed", current_cam);
-                    let _ = app.emit_to("main", "camera-state-changed", current_cam);
-                    let _ = app.emit_to("osd", "camera-state-changed", current_cam);
                 }
 
                 // 4. Watch Microphone Mute State
@@ -226,8 +218,6 @@ pub fn start_hardware_state_watcher(
                         use tauri::Emitter;
                         crate::system::osd_window::wake_osd_if_enabled(&app);
                         let _ = app.emit("mic-state-changed", current_mic);
-                        let _ = app.emit_to("main", "mic-state-changed", current_mic);
-                        let _ = app.emit_to("osd", "mic-state-changed", current_mic);
                     }
                 }
             }
@@ -251,20 +241,17 @@ pub fn start_hardware_state_watcher(
             } else {
                 // Dual-parameter AC/Battery safety & persistence guard for Gaming Laptops:
                 // Gaming laptops must not run in Beast (3) or Custom (4) on battery/Type-C to prevent battery overcurrent.
-                // Thin & light laptops rely on hardware EC power envelopes and must NOT be demoted or forced into balance.
-                let is_thin_light = crate::commands::power_cmd::is_thin_and_light_or_pure_igpu();
+                // Startup mode restoration is owned exclusively by `system::power::spawn_hardware_state_restore`;
+                // the first iteration here only records the `last_dc_line` baseline (fixes G5 duplicate select).
                 if let Some(last_dc) = last_dc_line {
                     if last_dc && !is_dc {
                         // DC round adapter unplugged (Transition: DC Online -> On Battery/Type-C)
                         let mut updated_cfg = crate::system::config::load_config();
                         let cur_mode = updated_cfg.power_mode;
-                        if cur_mode >= 1 && cur_mode <= 4 {
+                        if (1..=4).contains(&cur_mode) {
                             updated_cfg.power_mode_ac = cur_mode;
                         }
-                        if is_thin_light {
-                            crate::log_info!("POWER_WATCHER", "Power line unplugged on thin-and-light laptop: preserving user power mode {}", cur_mode);
-                            crate::system::config::modify_config(|c| c.power_mode_ac = updated_cfg.power_mode_ac.clone());
-                        } else if !updated_cfg.unlock_battery_power_limit {
+                        if !updated_cfg.unlock_battery_power_limit {
                             let target_mode = if updated_cfg.power_mode_battery == 1 { 1 } else { 2 };
                             crate::log_info!("POWER_WATCHER", "DC round adapter unplugged: safely switching power mode {} -> {} (Battery mode) on Battery/Type-C", cur_mode, target_mode);
                             let remembered = updated_cfg.power_mode_ac;
@@ -288,38 +275,11 @@ pub fn start_hardware_state_watcher(
                             "POWER_WATCHER",
                             "DC round adapter plugged in: restoring AC power mode -> {} ({})",
                             target_mode,
-                            match target_mode {
-                                1 => "Office",
-                                2 => "Balance",
-                                3 => "Beast",
-                                4 => "Custom",
-                                5 => "Unknown",
-                                6 => "Unknown",
-                                _ => "Unknown",
-                            }
+                            crate::system::mode::mode_label(target_mode),
                         );
                         let _ = crate::system::mode::select(target_mode, crate::system::mode::Origin::PowerLine);
                         use tauri::Emitter;
                         let _ = app.emit("dc-status-changed", true);
-                    }
-                } else if is_dc {
-                    // Initial first loop (last_dc_line is None): DC is online at boot
-                    let cfg = crate::system::config::load_config();
-                    let target_mode = match cfg.power_mode_ac {
-                        1..=4 => cfg.power_mode_ac,
-                        _ => 3,
-                    };
-                    if cfg.power_mode != target_mode {
-                        crate::log_info!("POWER_WATCHER", "Initial loop: DC round adapter online, aligning power mode {} -> {}", cfg.power_mode, target_mode);
-                        let _ = crate::system::mode::select(target_mode, crate::system::mode::Origin::Startup);
-                    }
-                } else if !is_dc && !is_thin_light {
-                    // Initial first loop (last_dc_line is None): Laptop running on Battery/Type-C (gaming laptops only)
-                    let cfg = crate::system::config::load_config();
-                    if !cfg.unlock_battery_power_limit && (cfg.power_mode == 3 || cfg.power_mode == 4) {
-                        let target_mode = if cfg.power_mode_battery == 1 { 1 } else { 2 };
-                        crate::log_info!("POWER_WATCHER", "Initial loop: on Battery/Type-C, safely adjusting mode {} -> {}", cfg.power_mode, target_mode);
-                        let _ = crate::system::mode::select(target_mode, crate::system::mode::Origin::Startup);
                     }
                 }
             }
@@ -449,14 +409,21 @@ pub fn start_hardware_state_watcher(
                 if let Some((curr_mhz, max_mhz, limit_mhz)) = crate::system::power_mode::get_cpu_frequency_info() {
                     let is_throttled = curr_mhz < 1000 && is_dc;
                     if is_throttled {
-                        if !last_was_throttled || custom_trace_ticks % 5 == 0 {
-                            let raw_pl1 = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_PL1).unwrap_or(0);
-                            let raw_pl2 = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_PL2).unwrap_or(0);
-                            let raw_pl4 = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_PL4).unwrap_or(0);
-                            let raw_tcc = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_TCC).unwrap_or(0);
-                            let raw_fan_clamp = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_FAN_BOOST_CLAMP).unwrap_or(0);
-                            let raw_power_status = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_POWER_STATUS).unwrap_or(0);
-                            let raw_turbo_flag = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_TURBO_TRIGGER_1115).unwrap_or(0);
+                        if !last_was_throttled || custom_trace_ticks.is_multiple_of(5) {
+                            let addrs = [
+                                crate::driver::wmi_ec::ADDR_CUSTOM_PL1,
+                                crate::driver::wmi_ec::ADDR_CUSTOM_PL2,
+                                crate::driver::wmi_ec::ADDR_CUSTOM_PL4,
+                                crate::driver::wmi_ec::ADDR_CUSTOM_TCC,
+                                crate::driver::wmi_ec::ADDR_FAN_BOOST_CLAMP,
+                                crate::driver::wmi_ec::ADDR_POWER_STATUS,
+                                crate::driver::wmi_ec::ADDR_TURBO_TRIGGER_1115,
+                            ];
+                            let vals = crate::driver::wmi_ec::wmi_batch_read_ec(&addrs)
+                                .filter(|v| v.len() == addrs.len())
+                                .unwrap_or_else(|| vec![0; addrs.len()]);
+                            let (raw_pl1, raw_pl2, raw_pl4, raw_tcc, raw_fan_clamp, raw_power_status, raw_turbo_flag) =
+                                (vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6]);
                             crate::log_warn!(
                                 "CUSTOM_TRACE",
                                 "[THROTTLE ANOMALY DETECTED] CPU Frequency collapsed to {}MHz (Max: {}MHz, Limit: {}MHz)! EC Diagnostic Dump: PL1={}W, PL2={}W, PL4={}W, Tcc=0x{:02X}, Boost=0x{:02X}, Power=0x{:02X}, Silent={}",
@@ -476,24 +443,29 @@ pub fn start_hardware_state_watcher(
                         last_was_throttled = true;
                     } else {
                         last_was_throttled = false;
-                        if custom_trace_ticks % 8 == 0 {
-                            // Checked every ~4 seconds, logged only when a value changes (this line
-                            // used to be 85 % of the log file).
-                            let raw_pl1 = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_PL1).unwrap_or(0);
-                            let raw_pl2 = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_PL2).unwrap_or(0);
-                            let raw_pl4 = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_PL4).unwrap_or(0);
-                            let raw_tcc = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_CUSTOM_TCC).unwrap_or(0);
-                            let raw_db_watts = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_GPU_DB_MAX).unwrap_or(0);
-                            let raw_power_status = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_POWER_STATUS).unwrap_or(0);
-                            let snapshot = (raw_pl1, raw_pl2, raw_pl4, raw_tcc, raw_db_watts, raw_power_status);
-                            if last_custom_trace != Some(snapshot) {
-                                last_custom_trace = Some(snapshot);
-                                crate::log_info!(
-                                    "CUSTOM_TRACE",
-                                    "Custom Mode Runtime: CPU Freq={}MHz (Max={}MHz), PL1={}W, PL2={}W, PL4={}W, Tcc=0x{:02X}, DB={}W, Power=0x{:02X} (DC_Online={})",
-                                    curr_mhz, max_mhz,
-                                    raw_pl1, raw_pl2, raw_pl4, raw_tcc, raw_db_watts, raw_power_status, is_dc
-                                );
+                        if custom_trace_ticks.is_multiple_of(8) {
+                            // Checked every ~4 seconds in a single batched EC read; logged only on change.
+                            let addrs = [
+                                crate::driver::wmi_ec::ADDR_CUSTOM_PL1,
+                                crate::driver::wmi_ec::ADDR_CUSTOM_PL2,
+                                crate::driver::wmi_ec::ADDR_CUSTOM_PL4,
+                                crate::driver::wmi_ec::ADDR_CUSTOM_TCC,
+                                crate::driver::wmi_ec::ADDR_GPU_DB_MAX,
+                                crate::driver::wmi_ec::ADDR_POWER_STATUS,
+                            ];
+                            if let Some(vals) = crate::driver::wmi_ec::wmi_batch_read_ec(&addrs).filter(|v| v.len() == addrs.len()) {
+                                let (raw_pl1, raw_pl2, raw_pl4, raw_tcc, raw_db_watts, raw_power_status) =
+                                    (vals[0], vals[1], vals[2], vals[3], vals[4], vals[5]);
+                                let snapshot = (raw_pl1, raw_pl2, raw_pl4, raw_tcc, raw_db_watts, raw_power_status);
+                                if last_custom_trace != Some(snapshot) {
+                                    last_custom_trace = Some(snapshot);
+                                    crate::log_info!(
+                                        "CUSTOM_TRACE",
+                                        "Custom Mode Runtime: CPU Freq={}MHz (Max={}MHz), PL1={}W, PL2={}W, PL4={}W, Tcc=0x{:02X}, DB={}W, Power=0x{:02X} (DC_Online={})",
+                                        curr_mhz, max_mhz,
+                                        raw_pl1, raw_pl2, raw_pl4, raw_tcc, raw_db_watts, raw_power_status, is_dc
+                                    );
+                                }
                             }
                         }
                     }
@@ -502,44 +474,43 @@ pub fn start_hardware_state_watcher(
                 last_was_throttled = false;
             }
 
-            // 9. Watch Windows Color Management / Active ICM Profile Changes (every ~1s)
-            if tick_count % 4 == 0 {
-                let monitors = crate::system::display::get_all_monitors();
+            // 9. Watch Windows Color Management / Active ICM Profile Changes (every ~8s, skipped while blanked)
+            if !crate::system::screen_blank::is_active() && tick_count.is_multiple_of(32) {
+                let device_names = crate::system::display::get_active_display_device_names();
                 let cfg = crate::system::color_calibration::load_calibration_config();
                 let mut changed = false;
 
-                for mon in &monitors {
+                for device_name in &device_names {
                     // Only query registry snapshot (real user-assigned profile, avoiding GDI fallback to OEM default)
-                    let cur_icm = crate::system::color_calibration::get_registry_active_icm_for_device(&mon.device_name);
+                    let cur_icm = crate::system::color_calibration::get_registry_active_icm_for_device(device_name);
 
-                    let mon_setting = cfg.monitors.get(&mon.device_name);
+                    let mon_setting = cfg.monitors.get(device_name);
                     let is_configured_uncalibrated = mon_setting.map(|s| !s.enabled || s.selected_profile_id == "default_native").unwrap_or(false);
 
                     // If user in OpenRevo explicitly chose default_native, do NOT auto-restore!
                     if is_configured_uncalibrated && cur_icm.is_none() {
-                        last_color_profiles.insert(mon.device_name.clone(), None);
+                        last_color_profiles.insert(device_name.clone(), None);
                         continue;
                     }
 
-                    let prev_icm = last_color_profiles.get(&mon.device_name).cloned();
+                    let prev_icm = last_color_profiles.get(device_name).cloned();
                     if let Some(prev) = prev_icm {
                         if prev != cur_icm {
                             crate::log_info!(
                                 "COLOR_WATCHER",
                                 "External Windows color profile changed on {}: {:?} -> {:?}",
-                                mon.device_name,
+                                device_name,
                                 prev,
                                 cur_icm
                             );
                             changed = true;
                         }
                     }
-                    last_color_profiles.insert(mon.device_name.clone(), cur_icm);
+                    last_color_profiles.insert(device_name.clone(), cur_icm);
                 }
                 if changed {
                     use tauri::Emitter;
                     let _ = app.emit("color-calibration-changed", ());
-                    let _ = app.emit_to("main", "color-calibration-changed", ());
                 }
             }
         }

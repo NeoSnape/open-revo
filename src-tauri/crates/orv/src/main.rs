@@ -103,10 +103,28 @@ fn fan_state_cn(s: &str) -> &'static str {
     }
 }
 
+fn override_cn(ov: &str) -> &str {
+    match ov {
+        "screen_blank" => "黑屏",
+        "sleep" => "休眠",
+        other => other,
+    }
+}
+
 fn print_status(s: &Value) {
-    let mut mode = format!("{} ({})", mode_cn(s["mode"].as_str().unwrap_or("")), s["mode"].as_str().unwrap_or(""));
-    if s["mode"] == "custom" && !s["custom_profile"].as_str().unwrap_or("").is_empty() {
-        mode.push_str(&format!(" · {}", s["custom_profile"].as_str().unwrap()));
+    let eff = s["mode"].as_str().unwrap_or("");
+    let profile = s["custom_profile"].as_str().unwrap_or("");
+    let mut mode = format!("{} ({})", mode_cn(eff), eff);
+    if eff == "custom" && !profile.is_empty() {
+        mode.push_str(&format!(" · {}", profile));
+    }
+    if let Some(ov) = s["mode_override"].as_str().filter(|v| !v.is_empty()) {
+        let sel = s["selected_mode"].as_str().unwrap_or("");
+        let mut sel_desc = mode_cn(sel).to_string();
+        if sel == "custom" && !profile.is_empty() {
+            sel_desc.push_str(&format!(" · {}", profile));
+        }
+        mode.push_str(&format!(" [{}临时覆盖，已选: {}]", override_cn(ov), sel_desc));
     }
     println!(
         "模式   {}   强冷 {}   风扇表 {} · {}",

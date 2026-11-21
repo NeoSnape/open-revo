@@ -3,11 +3,10 @@
 // Uses an isolated Single-Threaded Worker Actor to prevent COM MTA pollution on Tauri's UI thread (STA)
 // and guarantee 100% thread safety against 0xC0000005 ACCESS_VIOLATION.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex as StdMutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::core::{w, BSTR, VARIANT};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoSetProxyBlanket, CoUninitialize, CLSCTX_INPROC_SERVER,
@@ -21,8 +20,9 @@ use windows::Win32::System::Wmi::{
 const RPC_C_AUTHN_WINNT: u32 = 10;
 const RPC_C_AUTHZ_NONE: u32 = 0;
 
-static MULONG_PROBED: AtomicBool = AtomicBool::new(false);
-static MULONG_AVAILABLE: AtomicBool = AtomicBool::new(false);
+/// Probe cache: positive results live forever; negative results expire after 5s so early-boot WMI races recover.
+static MULONG_STATE: StdMutex<Option<(bool, Instant)>> = StdMutex::new(None);
+const MULONG_NEGATIVE_TTL: Duration = Duration::from_secs(5);
 
 enum MulongTask {
     Probe(Sender<bool>),
@@ -326,8 +326,13 @@ fn worker_loop(rx: Receiver<MulongTask>) {
 
 /// Probes whether AcpiTest_MULong is supported on this machine
 pub fn probe_mulong_available() -> bool {
-    if MULONG_PROBED.load(Ordering::Acquire) {
-        return MULONG_AVAILABLE.load(Ordering::Acquire);
+    {
+        let guard = MULONG_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((ok, at)) = *guard {
+            if ok || at.elapsed() < MULONG_NEGATIVE_TTL {
+                return ok;
+            }
+        }
     }
 
     let ok = if let Some(worker) = WORKER.as_ref() {
@@ -341,8 +346,10 @@ pub fn probe_mulong_available() -> bool {
         false
     };
 
-    MULONG_AVAILABLE.store(ok, Ordering::Release);
-    MULONG_PROBED.store(true, Ordering::Release);
+    {
+        let mut guard = MULONG_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some((ok, Instant::now()));
+    }
     ok
 }
 
@@ -364,13 +371,17 @@ pub fn verify_mulong_functional() -> bool {
     false
 }
 
-/// Returns whether AcpiTest_MULong is available
+/// Returns whether AcpiTest_MULong is available (retries negative probes after MULONG_NEGATIVE_TTL)
 pub fn is_mulong_available() -> bool {
-    if !MULONG_PROBED.load(Ordering::Acquire) {
-        probe_mulong_available()
-    } else {
-        MULONG_AVAILABLE.load(Ordering::Acquire)
+    {
+        let guard = MULONG_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((ok, _)) = *guard {
+            if ok {
+                return true;
+            }
+        }
     }
+    probe_mulong_available()
 }
 
 /// Reads a 1-byte register from EC RAM via native WMI AcpiTest_MULong.GetSetULong

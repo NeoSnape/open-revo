@@ -44,12 +44,22 @@ pub fn start_idle_watcher(mgr_ref: &Arc<IteLightingManager>) {
                 if idle_ms >= timeout_ms {
                     // User idle timeout reached -> turn off all lights if not already sleeping
                     if !mgr.is_sleeping.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                        crate::log_info!(
+                            "IDLE_WATCHER",
+                            "System idle timeout ({}ms >= {}ms) reached. Dimming all lighting zones...",
+                            idle_ms,
+                            timeout_ms
+                        );
                         mgr.turn_off_all();
                     }
                 } else {
                     // User has recent input activity (pressed any key or moved mouse)
                     // If currently sleeping, instantly wake up & restore preset effects!
                     if mgr.is_sleeping.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        crate::log_info!(
+                            "IDLE_WATCHER",
+                            "User activity detected. Instantly restoring all lighting zones from sleep..."
+                        );
                         crate::driver::ite_streamer::get_global_streamer().set_unsupported(false);
                         watchdog_retries = 0;
                         mgr.restore_all();
@@ -67,8 +77,8 @@ fn check_streamer_watchdog(mgr: &IteLightingManager, watchdog_retries: &mut u32)
     if !mgr.has_keyboard_device() {
         return;
     }
-    let cfg = crate::system::config::load_config();
-    if cfg.lighting.kb_engine != "streamer" {
+    let is_streamer_engine = crate::system::config::with_config(|cfg| cfg.lighting.kb_engine == "streamer");
+    if !is_streamer_engine {
         return;
     }
     let streamer = crate::driver::ite_streamer::get_global_streamer();
@@ -89,13 +99,23 @@ fn check_streamer_watchdog(mgr: &IteLightingManager, watchdog_retries: &mut u32)
                 "Streamer thread inactive after 3 attempts. Safely falling back to Hardware MCU."
             );
             streamer.set_unsupported(true);
+            let fallback = crate::system::config::with_config(|cfg| {
+                (
+                    cfg.lighting.kb_enabled,
+                    cfg.lighting.kb_effect,
+                    cfg.lighting.kb_brightness,
+                    cfg.lighting.kb_speed,
+                    cfg.lighting.kb_direction,
+                    cfg.lighting.kb_color.clone(),
+                )
+            });
             streamer.apply_hardware(
-                cfg.lighting.kb_enabled,
-                cfg.lighting.kb_effect,
-                cfg.lighting.kb_brightness,
-                cfg.lighting.kb_speed,
-                cfg.lighting.kb_direction,
-                &cfg.lighting.kb_color,
+                fallback.0,
+                fallback.1,
+                fallback.2,
+                fallback.3,
+                fallback.4,
+                &fallback.5,
             );
         }
     } else if streamer.is_running() {
@@ -281,12 +301,10 @@ pub fn set_keyboard_brightness_level(level: u8, app_handle: Option<&AppHandle>) 
         }
     }
 
-    // 3. Emit Tauri event to frontend
+    // 3. Emit Tauri event to frontend (app.emit broadcasts to all windows including main & osd)
     if let Some(handle) = app_handle {
         crate::system::osd_window::wake_osd_if_enabled(handle);
         let _ = handle.emit("keyboard-brightness-changed", target_level);
-        let _ = handle.emit_to("main", "keyboard-brightness-changed", target_level);
-        let _ = handle.emit_to("osd", "keyboard-brightness-changed", target_level);
     }
 
     target_level

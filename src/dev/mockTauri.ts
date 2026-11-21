@@ -21,14 +21,10 @@
 
 import {
   ACTIVE_PROFILE,
-  BIOS_MENU_STATUS,
   BUILTIN_PRESETS,
   COLOR_PROFILES,
-  COOLER_CURVE_POINTS,
   DEFAULT_HARDWARE_OVERRIDE,
   DEFAULT_LIGHTING,
-  DEFAULT_MODULE_TOGGLES,
-  DISCONNECTED_COOLER_TELEMETRY,
   DISPLAY_COLOR_PRESETS,
   FACTORY_POWER_PRESETS,
   GPU_MODE_CAPABILITIES,
@@ -39,7 +35,6 @@ import {
   MODEL_CAPABILITIES,
   OSD_CONFIG,
   SUPPORT_FLAGS,
-  UPDATE_CHECK_RESULT,
   USER_DATA_DIR,
   WINDOWS_POWER_SCHEMES,
   type MockDisplayColorPreset,
@@ -138,12 +133,9 @@ const state = {
   activeColorPresetId: 'preset_vibrant',
   activeCalibrationId: 'default_native',
   calibrationEnabled: false,
-  moduleToggles: clone(DEFAULT_MODULE_TOGGLES) as Record<string, boolean>,
   lighting: clone(DEFAULT_LIGHTING) as MockLightingState,
   activeProfileId: 'preset_silent_beast',
   profiles: clone(BUILTIN_PRESETS) as CustomProfilePreset[],
-  biosEnabled: BIOS_MENU_STATUS.enabled,
-  fanSpeedCapRpm: 0,
   fanRampMs: 500,
   customColorPresets: [] as MockDisplayColorPreset[],
   extraColorProfiles: [] as Array<{
@@ -167,20 +159,6 @@ const cfg: Record<string, any> = {
   log_enabled: false,
   log_level: 1,
   log_filter: null,
-  water_cooler_enabled: false,
-  keep_water_cooler: true,
-  cooler_led_on: true,
-  cooler_led_r: 0,
-  cooler_led_g: 128,
-  cooler_led_b: 0,
-  cooler_led_mode: 2,
-  cooler_pump_voltage: 7,
-  cooler_fan_duty: 0,
-  cooler_strategy: 'smart',
-  cooler_curve_points: COOLER_CURVE_POINTS,
-  cooler_mac: '',
-  cooler_pump_start_temp: 55,
-  cooler_pump_turbo_temp: 90,
   refresh_rate: state.refreshRate,
   miniled_enabled: false,
   wifi_enabled: true,
@@ -241,11 +219,6 @@ const cfg: Record<string, any> = {
   wake_window_mode: startInFullMode ? 'full' : 'remember',
   mini_auto_hide_on_blur: true,
   active_profile_id: state.activeProfileId,
-  module_toggles: state.moduleToggles,
-  custom_plugin_toggles: {},
-  widget_positions: {},
-  active_skin: null,
-  active_background: null,
 };
 
 // ─── Derived snapshots ──────────────────────────────────────────────────────
@@ -460,27 +433,12 @@ function userDataDirInfo() {
   return { path: USER_DATA_DIR, mode: 'standard' };
 }
 
-function coolerTelemetry() {
-  return clone({
-    ...DISCONNECTED_COOLER_TELEMETRY,
-    curve_points: COOLER_CURVE_POINTS,
-  });
-}
-
-function biosStatus() {
-  return { ...BIOS_MENU_STATUS, enabled: state.biosEnabled };
-}
-
 function powerSchemes() {
   const preferred = cfg.preferred_power_scheme;
   return WINDOWS_POWER_SCHEMES.map((s) => ({
     ...s,
     is_active: s.guid === preferred,
   }));
-}
-
-function moduleToggles() {
-  return { ...state.moduleToggles };
 }
 
 // ─── Event bus ──────────────────────────────────────────────────────────────
@@ -954,24 +912,10 @@ const handlers: Record<string, Handler> = {
       if (typeof a.gpuMemOffset === 'number') next.gpu_mem_offset_mhz = a.gpuMemOffset;
       state.profiles[idx] = { ...p, profile: next };
     }
-    const cap = argNum(a, NaN, 'fanSpeedCap', 'fan_speed_cap');
-    if (Number.isFinite(cap)) state.fanSpeedCapRpm = cap;
     return null;
   },
   heal_gpu_power_contract: () => true,
   heal_cpu_power_contract: () => true,
-  set_bld_fan_speed_cap: (a) => {
-    state.fanSpeedCapRpm = Math.round(argNum(a, 0, 'rpm'));
-    state.fanBoost = state.fanSpeedCapRpm > 0;
-    return null;
-  },
-
-  // -- BIOS / UEFI NVRAM ---------------------------------------------------
-  get_bios_advanced_menu_status: () => biosStatus(),
-  toggle_bios_advanced_menu: (a) => {
-    state.biosEnabled = argBool(a, !state.biosEnabled, 'enable', 'enabled');
-    return biosStatus();
-  },
 
   // -- GPU MUX -------------------------------------------------------------
   get_gpu_mode_info: () => gpuModeInfo(),
@@ -1207,15 +1151,6 @@ const handlers: Record<string, Handler> = {
   open_user_data_dir: () => null,
   clear_user_data_dir: () => '用户数据目录已清空',
 
-  // -- Module toggles ------------------------------------------------------
-  get_module_toggles: () => moduleToggles(),
-  set_module_enabled: (a) => {
-    const id = argStr(a, '', 'id');
-    const enabled = argBool(a, true, 'enabled');
-    if (id) state.moduleToggles[id] = enabled;
-    return enabled;
-  },
-
   // -- Shortcuts -----------------------------------------------------------
   get_registered_shortcuts: () => [],
   register_custom_shortcut: () => true,
@@ -1235,50 +1170,7 @@ const handlers: Record<string, Handler> = {
     consumers: [],
   }),
 
-  // -- Skins / backgrounds (feature removed upstream) ----------------------
-  get_active_skin: () => cfg.active_skin ?? null,
-  set_active_skin: (a) => {
-    cfg.active_skin = a.skinId ?? null;
-    return null;
-  },
-  get_active_background: () => cfg.active_background ?? null,
-  set_active_background: (a) => {
-    cfg.active_background = a.backgroundId ?? null;
-    return null;
-  },
-  load_plugin_theme_css: () => '',
-  load_plugin_background_css: () => '',
-  load_plugin_html: () => '',
-
-  // -- Custom plugins (feature removed upstream) ---------------------------
-  get_custom_plugins: () => [],
-  set_custom_plugin_enabled: () => true,
-  open_plugins_dir: () => null,
-  open_custom_widget: () => null,
-  close_custom_widget: () => null,
-  widget_ready: () => null,
-  get_plugin_service_status: (a) => ({
-    plugin_id: argStr(a, '', 'pluginId', 'plugin_id'),
-    status: 'stopped' as const,
-  }),
-  start_plugin_service: (a) => ({
-    plugin_id: argStr(a, '', 'pluginId', 'plugin_id'),
-    status: 'stopped' as const,
-    message: '插件服务已在浏览器 mock 中禁用',
-  }),
-  stop_plugin_service: (a) => ({
-    plugin_id: argStr(a, '', 'pluginId', 'plugin_id'),
-    status: 'stopped' as const,
-  }),
-  get_raw_ec_capabilities: () => null,
-  raw_ec_read: () => 0,
-  raw_ec_write: () => true,
-  raw_mailbox_invoke: () => null,
-  get_registered_watchers: () => [],
-  register_custom_watcher: () => true,
-  unregister_custom_watcher: () => true,
-
-  // -- Custom BRFX engine (feature removed upstream) -----------------------
+  // -- Custom BRFX engine --------------------------------------------------
   get_custom_brfx_list: () => [],
   save_custom_brfx: (a) => `${USER_DATA_DIR}\\brfx\\${argStr(a, 'custom.brfx', 'filename')}`,
   open_brfx_in_notepad: () => null,
@@ -1286,28 +1178,6 @@ const handlers: Record<string, Handler> = {
   clear_custom_brfx_script: () => null,
   set_custom_fx_text: () => null,
   get_custom_fx_text: () => '',
-
-  // -- Water cooler (hardware absent on this machine) ----------------------
-  get_water_cooler_status: () => coolerTelemetry(),
-  set_water_cooler_enabled: (a) => {
-    cfg.water_cooler_enabled = argBool(a, false, 'enabled', 'enable');
-    return null;
-  },
-  start_water_cooler: () => coolerTelemetry(),
-  stop_water_cooler: () => coolerTelemetry(),
-  pair_water_cooler: () => coolerTelemetry(),
-  reset_water_cooler: () => coolerTelemetry(),
-  select_water_cooler: () => coolerTelemetry(),
-  set_water_cooler_speed: () => coolerTelemetry(),
-  set_water_cooler_strategy: () => coolerTelemetry(),
-  set_water_cooler_led: () => coolerTelemetry(),
-  set_water_cooler_pump_thresholds: () => coolerTelemetry(),
-  fill_water_cooler: () => null,
-  scan_water_cooler_devices: () => [],
-
-  // -- Updater -------------------------------------------------------------
-  check_for_updates_cmd: () => ({ ...UPDATE_CHECK_RESULT }),
-  download_and_install_update_cmd: () => null,
 
   // -- Model manifests (read-only diagnostics) -----------------------------
   get_models_file_path: () => `${USER_DATA_DIR}\\models.json`,

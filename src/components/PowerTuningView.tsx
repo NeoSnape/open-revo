@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Zap, Battery, Plug, ShieldCheck, Globe, Ban, Lock, Clock, Moon, Snowflake, Info } from 'lucide-react';
 import { RevBadge, RevSwitch } from './ui';
 
@@ -53,20 +55,98 @@ export const PowerTuningView: React.FC = () => {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    invoke<PowerSettingsInfo>('get_power_settings')
-      .then((res) => {
-        if (res) setPowerInfo(res);
-      })
-      .catch((e) => console.error('Failed to get power settings:', e));
+    let disposed = false;
+    let visibilitySyncedByEvent = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let lastFetchAt = 0;
 
-    const timer = setInterval(() => {
+    const fetchPowerSettings = (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastFetchAt < 250) return;
+      lastFetchAt = now;
       invoke<PowerSettingsInfo>('get_power_settings')
         .then((res) => {
-          if (res) setPowerInfo(res);
+          if (!disposed && res) setPowerInfo(res);
         })
-        .catch(() => { });
-    }, 5000);
-    return () => clearInterval(timer);
+        .catch((e) => console.error('Failed to get power settings:', e));
+    };
+
+    const stopPolling = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+
+    const startPolling = () => {
+      if (!disposed && !timer) {
+        timer = setInterval(() => fetchPowerSettings(true), 5000);
+      }
+    };
+
+    const applyVisibility = (visible: boolean, immediate: boolean, fromEvent = true) => {
+      if (disposed) return;
+      if (fromEvent) {
+        visibilitySyncedByEvent = true;
+      } else if (visibilitySyncedByEvent) {
+        return;
+      }
+      if (visible) {
+        if (immediate) fetchPowerSettings(false);
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+
+    const initVisibility = async () => {
+      let visible = document.visibilityState !== 'hidden';
+      try {
+        const win = getCurrentWindow();
+        const [vis, min] = await Promise.all([win.isVisible(), win.isMinimized()]);
+        visible = vis && !min && document.visibilityState !== 'hidden';
+      } catch (_) {}
+      applyVisibility(visible, visible, false);
+    };
+    initVisibility();
+
+    const handleFocus = () => applyVisibility(true, true);
+    const handleVisibilityChange = () => {
+      const vis = document.visibilityState !== 'hidden';
+      applyVisibility(vis, vis);
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    let unlistenWindowVis: (() => void) | undefined;
+    let unlistenTauriFocus: (() => void) | undefined;
+
+    listen<boolean>('window-visibility-changed', (event) => {
+      const vis = Boolean(event.payload);
+      applyVisibility(vis, vis);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlistenWindowVis = fn;
+    }).catch(() => {});
+
+    try {
+      getCurrentWindow()
+        .listen('tauri://focus', handleFocus)
+        .then((fn) => {
+          if (disposed) fn();
+          else unlistenTauriFocus = fn;
+        })
+        .catch(() => {});
+    } catch (_) {}
+
+    return () => {
+      disposed = true;
+      stopPolling();
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (unlistenWindowVis) unlistenWindowVis();
+      if (unlistenTauriFocus) unlistenTauriFocus();
+    };
   }, []);
 
   const handleSelectBatteryMode = async (mode: string) => {

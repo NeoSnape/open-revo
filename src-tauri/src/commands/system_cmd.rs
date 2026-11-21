@@ -121,7 +121,24 @@ pub fn collect_hardware_state(
     let is_intel_13_14_gen = cpu.is_intel_13_14_gen();
     let autostart_enabled = autostart::is_autostart_enabled_cached();
 
-    let cfg = crate::system::config::load_config();
+    let (auto_min_refresh_on_battery, unlock_battery_power_limit, takeover_oem) =
+        crate::system::config::with_config(|cfg| {
+            (
+                cfg.auto_min_refresh_on_battery,
+                cfg.unlock_battery_power_limit,
+                cfg.takeover_oem,
+            )
+        });
+
+    let monitors = display::get_all_monitors();
+    let primary_mon = monitors.iter().find(|m| m.is_primary).or_else(|| monitors.first());
+    let refresh_rate = primary_mon
+        .map(|m| m.current_hz)
+        .unwrap_or_else(display::get_refresh_rate);
+    let available_refresh_rates = primary_mon
+        .map(|m| m.supported_rates.clone())
+        .filter(|r| !r.is_empty())
+        .unwrap_or_else(display::get_available_refresh_rates);
 
     HardwareState {
         power_mode,
@@ -138,16 +155,16 @@ pub fn collect_hardware_state(
         gpu_mem_freq,
         gpu_vram_mb,
         gpu_vram_used_mb,
-        refresh_rate: display::get_refresh_rate(),
-        available_refresh_rates: display::get_available_refresh_rates(),
-        monitors: display::get_all_monitors(),
-        auto_min_refresh_on_battery: cfg.auto_min_refresh_on_battery,
-        unlock_battery_power_limit: cfg.unlock_battery_power_limit,
+        refresh_rate,
+        available_refresh_rates,
+        monitors,
+        auto_min_refresh_on_battery,
+        unlock_battery_power_limit,
         win_key_locked: crate::system::ec_sampler::latest().win_key_locked().unwrap_or_else(hooks::is_win_key_locked),
         is_mock,
         oem_running,
         oem_installed,
-        takeover_oem: cfg.takeover_oem,
+        takeover_oem,
         autostart: autostart_enabled,
         is_intel_13_14_gen,
         support_flags: crate::driver::wmi_ec::get_hardware_support_flags(),
@@ -166,7 +183,11 @@ pub fn get_hardware_status(
     ec_state: State<'_, SharedEcBridge>,
     gpu_state: State<'_, SharedGpuBridge>,
 ) -> HardwareState {
-    collect_hardware_state(ec_state.inner(), gpu_state.inner(), true)
+    collect_hardware_state(
+        ec_state.inner(),
+        gpu_state.inner(),
+        crate::system::telemetry::should_query_gpu(),
+    )
 }
 
 #[tauri::command]
@@ -231,12 +252,8 @@ pub fn set_autostart_enabled(enabled: bool) -> Result<bool, String> {
     res
 }
 
-#[tauri::command]
-pub fn toggle_oem_service(
-    take_over: bool,
-    ec_state: State<'_, SharedEcBridge>,
-    gpu_state: State<'_, SharedGpuBridge>,
-) -> Result<HardwareState, String> {
+/// Shared OEM service takeover/restore core used by both UI command and tray menu.
+pub fn apply_oem_takeover(take_over: bool, ec_state: &SharedEcBridge) {
     let mut cfg = crate::system::config::modify_config(|c| {
         c.takeover_oem = take_over;
         c.clone()
@@ -271,7 +288,7 @@ pub fn toggle_oem_service(
         });
 
         let cfg_clone = cfg.clone();
-        let ec_clone = Arc::clone(&ec_state.inner());
+        let ec_clone = Arc::clone(ec_state);
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(700));
             if let Some(val) = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_AP_OEM_BYTE) {
@@ -290,6 +307,8 @@ pub fn toggle_oem_service(
             } else {
                 2
             };
+            // `mode::select` applies the matching Windows Power Overlay via `apply_full_power_mode`;
+            // do not overwrite it afterwards with a stale `cfg_clone.power_mode` snapshot.
             let _ = crate::system::mode::select(effective_mode, crate::system::mode::Origin::Startup);
             ec_clone.lock().set_battery_limit(cfg_clone.battery_limit);
             if let Some(v) = crate::driver::wmi_ec::wmi_read_ec(crate::driver::wmi_ec::ADDR_AC_RECOVERY) {
@@ -310,16 +329,23 @@ pub fn toggle_oem_service(
                 let new_v = if cfg_clone.usb_charge_enabled { v | crate::driver::wmi_ec::TRIGGER_USB_CHARGE } else { v & !crate::driver::wmi_ec::TRIGGER_USB_CHARGE };
                 crate::driver::wmi_ec::wmi_write_ec(crate::driver::wmi_ec::ADDR_TRIGGER_BYTE, new_v);
             }
-            if cfg_clone.high_perf_scheme {
-                crate::system::power_mode::apply_windows_power_overlay(cfg_clone.power_mode);
-            }
             crate::log_info!("TAKEOVER", "Successfully synchronized power mode and battery limit after takeover");
         });
     } else {
         let _ = service_mgr::resume_oem_services();
     }
 
+    process::invalidate_oem_process_cache();
     ec_state.lock().reload();
+}
+
+#[tauri::command]
+pub fn toggle_oem_service(
+    take_over: bool,
+    ec_state: State<'_, SharedEcBridge>,
+    gpu_state: State<'_, SharedGpuBridge>,
+) -> Result<HardwareState, String> {
+    apply_oem_takeover(take_over, ec_state.inner());
     Ok(get_hardware_status(ec_state, gpu_state))
 }
 

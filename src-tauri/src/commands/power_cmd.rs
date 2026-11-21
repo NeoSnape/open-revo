@@ -541,24 +541,26 @@ pub fn set_sleep_guard_option(
     enable: bool,
     ec_state: State<'_, SharedEcBridge>,
 ) -> Result<PowerSettingsInfo, String> {
-    let mut cfg = crate::system::config::load_config();
-    match option.as_str() {
-        "disconnect_net" => cfg.sleep_disconnect_net = enable,
-        "block_away" => cfg.sleep_block_away = enable,
-        "ignore_sysreq" => cfg.sleep_ignore_sysreq = enable,
-        "disable_wake_timers" => cfg.sleep_disable_wake_timers = enable,
-        "deep_sleep" => cfg.sleep_deep_sleep = enable,
-        "hibernate_30m" => cfg.sleep_hibernate_30m = enable,
-        _ => return Err("Invalid sleep guard option".into()),
+    if !matches!(
+        option.as_str(),
+        "disconnect_net"
+            | "block_away"
+            | "ignore_sysreq"
+            | "disable_wake_timers"
+            | "deep_sleep"
+            | "hibernate_30m"
+    ) {
+        return Err("Invalid sleep guard option".into());
     }
     apply_sleep_guard_powercfg(&option, enable);
-    crate::system::config::modify_config(|c| {
-        c.sleep_disconnect_net = cfg.sleep_disconnect_net.clone();
-        c.sleep_block_away = cfg.sleep_block_away.clone();
-        c.sleep_ignore_sysreq = cfg.sleep_ignore_sysreq.clone();
-        c.sleep_disable_wake_timers = cfg.sleep_disable_wake_timers.clone();
-        c.sleep_deep_sleep = cfg.sleep_deep_sleep.clone();
-        c.sleep_hibernate_30m = cfg.sleep_hibernate_30m.clone();
+    crate::system::config::modify_config(|c| match option.as_str() {
+        "disconnect_net" => c.sleep_disconnect_net = enable,
+        "block_away" => c.sleep_block_away = enable,
+        "ignore_sysreq" => c.sleep_ignore_sysreq = enable,
+        "disable_wake_timers" => c.sleep_disable_wake_timers = enable,
+        "deep_sleep" => c.sleep_deep_sleep = enable,
+        "hibernate_30m" => c.sleep_hibernate_30m = enable,
+        _ => {}
     });
     Ok(get_power_settings(ec_state))
 }
@@ -568,23 +570,15 @@ pub fn set_master_sleep_guard(
     enable: bool,
     ec_state: State<'_, SharedEcBridge>,
 ) -> Result<PowerSettingsInfo, String> {
-    let mut cfg = crate::system::config::load_config();
-    cfg.sleep_guard_enabled = enable;
-    cfg.sleep_disconnect_net = enable;
-    cfg.sleep_block_away = enable;
-    cfg.sleep_ignore_sysreq = enable;
-    cfg.sleep_disable_wake_timers = enable;
-    cfg.sleep_deep_sleep = enable;
-    cfg.sleep_hibernate_30m = enable;
     apply_all_sleep_guard(enable);
     crate::system::config::modify_config(|c| {
-        c.sleep_guard_enabled = cfg.sleep_guard_enabled.clone();
-        c.sleep_disconnect_net = cfg.sleep_disconnect_net.clone();
-        c.sleep_block_away = cfg.sleep_block_away.clone();
-        c.sleep_ignore_sysreq = cfg.sleep_ignore_sysreq.clone();
-        c.sleep_disable_wake_timers = cfg.sleep_disable_wake_timers.clone();
-        c.sleep_deep_sleep = cfg.sleep_deep_sleep.clone();
-        c.sleep_hibernate_30m = cfg.sleep_hibernate_30m.clone();
+        c.sleep_guard_enabled = enable;
+        c.sleep_disconnect_net = enable;
+        c.sleep_block_away = enable;
+        c.sleep_ignore_sysreq = enable;
+        c.sleep_disable_wake_timers = enable;
+        c.sleep_deep_sleep = enable;
+        c.sleep_hibernate_30m = enable;
     });
     Ok(get_power_settings(ec_state))
 }

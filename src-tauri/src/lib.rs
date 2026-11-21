@@ -24,21 +24,6 @@ pub fn run() {
     // A self-relaunched instance (dead WebView recovery) waits for its predecessor to exit first.
     crate::system::webview_health::wait_for_previous_instance();
 
-    // 0. Disable WebView2 background throttling & renderer suspension for HUD overlay and widgets
-    #[cfg(windows)]
-    {
-        let existing = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
-        let disable_throttling_flags = "--disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding";
-        if existing.is_empty() {
-            std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", disable_throttling_flags);
-        } else if !existing.contains("--disable-background-timer-throttling") {
-            std::env::set_var(
-                "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-                format!("{} {}", existing, disable_throttling_flags),
-            );
-        }
-    }
-
     // 1. Install unconditional emergency panic hook immediately on process startup
     crate::system::logger::install_panic_hook();
     crate::system::boot_trace::init_boot_trace();
@@ -188,7 +173,6 @@ pub fn run() {
             commands::hardware_cmd::set_master_sleep_guard,
             commands::hardware_cmd::set_sleep_auto_office,
             commands::hardware_cmd::get_custom_profile,
-            commands::hardware_cmd::reset_custom_profile_to_defaults,
             commands::hardware_cmd::apply_custom_profile,
             commands::hardware_cmd::apply_fan_curve_live,
             commands::hardware_cmd::toggle_fan_isolated_output,
@@ -210,7 +194,6 @@ pub fn run() {
             commands::hardware_cmd::export_profile_preset,
             commands::hardware_cmd::apply_live_custom_tweak,
             commands::hardware_cmd::get_gpu_tuning_capabilities,
-            commands::hardware_cmd::get_bios_advanced_menu_status,
             commands::hardware_cmd::reboot_computer,
             commands::hardware_cmd::get_log_status,
             commands::hardware_cmd::set_log_level,

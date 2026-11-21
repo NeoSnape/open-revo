@@ -441,7 +441,7 @@ pub fn render_streamer_frame(
                     if strike.countdown <= 0 {
                         strike.head_pos = -2.5;
                         strike.bolt_x = rand_f64(*t + strike.bend_seed * 11.3) * 18.0 + 0.5;
-                        strike.bend_seed = rand_f64(*t * 3.7 + strike.bolt_x) * 6.28;
+                        strike.bend_seed = rand_f64(*t * 3.7 + strike.bolt_x) * std::f64::consts::TAU;
                         strike.countdown = 4 + (rand_f64(*t * 2.3) * 16.0) as i32;
                     }
                 }

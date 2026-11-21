@@ -1,7 +1,23 @@
+use std::sync::{LazyLock, OnceLock};
+use std::time::Duration;
 use windows::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
+
+use crate::system::query_cache::ExpiringCache;
+
+/// Cached OEM running check (8 s TTL) so telemetry/heartbeat paths avoid repeated Toolhelp32 snapshots.
+static OEM_RUNNING_CACHE: LazyLock<ExpiringCache<bool>> =
+    LazyLock::new(|| ExpiringCache::new(Duration::from_secs(8)));
+
+/// Cached OEM installation check (process-lifetime `OnceLock`, avoiding 19 registry/disk probes per tick).
+static OEM_INSTALLED_CACHE: OnceLock<bool> = OnceLock::new();
+
+/// Drop cached OEM process running status. Call after taking over or restoring official OEM services.
+pub fn invalidate_oem_process_cache() {
+    OEM_RUNNING_CACHE.invalidate();
+}
 
 /// Check if official Mechrevo/Uniwill background processes are actively running.
 /// We check every companion process (including GCUService, GCUBridge, AiStoneService, etc.).
@@ -77,6 +93,9 @@ pub fn kill_oem_processes_native() -> usize {
             let _ = CloseHandle(handle);
         }
     }
+    if killed > 0 {
+        invalidate_oem_process_cache();
+    }
     killed
 }
 
@@ -84,7 +103,14 @@ pub fn kill_oem_processes_native() -> usize {
 /// We check every companion process (including GCUService, GCUBridge, AiStoneService, etc.).
 /// If even ONE of them is still running (e.g., user disabled GCUService with Huorong but GCUBridge is still active),
 /// this returns true so the user is given the option to take over and stop it!
+///
+/// TTL-cached (8 s) for hot polling paths; use [`probe_oem_service_running`] when an immediate scan is required.
 pub fn is_oem_service_running() -> bool {
+    OEM_RUNNING_CACHE.get_or_compute(probe_oem_service_running)
+}
+
+/// Uncached Toolhelp32 process scan for OEM companion processes.
+pub fn probe_oem_service_running() -> bool {
     unsafe {
         if let Ok(handle) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) {
             if handle == INVALID_HANDLE_VALUE {
@@ -123,7 +149,15 @@ pub fn is_oem_service_running() -> bool {
 /// Uses 3-tier validation: Windows Service registry keys, physical directory presence, and active processes.
 /// If the machine has NEVER installed official software (clean Windows install), this returns false
 /// and the "接管/恢复官方控制台" button will be completely hidden from the UI!
+///
+/// Cached for the lifetime of the process (`OnceLock`); use [`probe_oem_installed`] for an uncached scan.
 pub fn is_oem_installed() -> bool {
+    *OEM_INSTALLED_CACHE.get_or_init(probe_oem_installed)
+}
+
+/// Uncached 3-tier OEM installation probe (service registry keys, install
+/// directories, UWP AppModel keys, running companion processes).
+pub fn probe_oem_installed() -> bool {
     use std::path::Path;
     use windows::core::HSTRING;
     use windows::Win32::System::Registry::{

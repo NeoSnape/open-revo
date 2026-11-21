@@ -128,7 +128,10 @@ pub fn get_calibration_config_path() -> PathBuf {
     crate::system::config::get_config_dir().join("color_calibration.json")
 }
 
-pub fn load_calibration_config() -> ColorCalibrationConfig {
+static CALIBRATION_CONFIG_CACHE: parking_lot::RwLock<Option<ColorCalibrationConfig>> =
+    parking_lot::RwLock::new(None);
+
+fn load_calibration_config_from_disk() -> ColorCalibrationConfig {
     let path = get_calibration_config_path();
     if path.exists() {
         if let Ok(content) = fs::read_to_string(&path) {
@@ -140,11 +143,29 @@ pub fn load_calibration_config() -> ColorCalibrationConfig {
     ColorCalibrationConfig::default()
 }
 
+pub fn load_calibration_config() -> ColorCalibrationConfig {
+    {
+        let guard = CALIBRATION_CONFIG_CACHE.read();
+        if let Some(ref cfg) = *guard {
+            return cfg.clone();
+        }
+    }
+    let mut guard = CALIBRATION_CONFIG_CACHE.write();
+    if let Some(ref cfg) = *guard {
+        return cfg.clone();
+    }
+    let cfg = load_calibration_config_from_disk();
+    *guard = Some(cfg.clone());
+    cfg
+}
+
 pub fn save_calibration_config(cfg: &ColorCalibrationConfig) {
     let path = get_calibration_config_path();
     if let Ok(json) = serde_json::to_string_pretty(cfg) {
         let _ = fs::write(path, json);
     }
+    let mut guard = CALIBRATION_CONFIG_CACHE.write();
+    *guard = Some(cfg.clone());
 }
 
 /// Generate linear identity gamma ramp (0..65535, 100% native uncalibrated screen output)
@@ -1134,6 +1155,92 @@ pub fn delete_custom_icc(profile_id: &str, device_name: Option<&str>) -> Result<
     }
 
     Ok(())
+}
+
+/// Enumerate all active display device names attached to the desktop (e.g. `\\.\DISPLAY1`).
+pub fn enumerate_active_display_devices() -> Vec<String> {
+    let mut devices = Vec::new();
+    const DISPLAY_DEVICE_ATTACHED_TO_DESKTOP: u32 = 0x0000_0001;
+    unsafe {
+        for idx in 0..16 {
+            let mut dd = DISPLAY_DEVICEW {
+                cb: std::mem::size_of::<DISPLAY_DEVICEW>() as u32,
+                device_name: [0; 32],
+                device_string: [0; 128],
+                state_flags: 0,
+                device_id: [0; 128],
+                device_key: [0; 128],
+            };
+            if !EnumDisplayDevicesW(std::ptr::null(), idx, &mut dd, 0).as_bool() {
+                break;
+            }
+            if (dd.state_flags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) != 0 {
+                let name = String::from_utf16_lossy(&dd.device_name)
+                    .trim_matches('\0')
+                    .to_string();
+                if !name.is_empty() {
+                    devices.push(name);
+                }
+            }
+        }
+    }
+    devices
+}
+
+/// Resolve the currently active ICC profile's hardware gamma ramp for a display device,
+/// checking both OpenRevo's per-monitor config and Windows Color Management (GDI/Registry).
+pub fn get_effective_base_ramp_for_device(device_name: &str) -> Option<GammaRamp> {
+    let cfg = load_calibration_config();
+    if let Some(setting) = cfg.monitors.get(device_name) {
+        if setting.enabled && setting.selected_profile_id != "default_native" {
+            let is_internal = device_name.eq_ignore_ascii_case("\\\\.\\DISPLAY1");
+            let profiles = list_all_color_profiles(is_internal);
+            if let Some(prof) = profiles.into_iter().find(|p| p.id == setting.selected_profile_id) {
+                if !prof.file_name.is_empty() {
+                    if let Some(bytes) = load_profile_bytes_by_name(&prof.file_name) {
+                        if let Some(ramp) = parse_icc_ramp(&bytes) {
+                            return Some(ramp);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let icm_file = get_windows_active_icm_profile_for_device(device_name)
+        .or_else(|| get_registry_active_icm_for_device(device_name));
+    if let Some(file_name) = icm_file {
+        if let Some(bytes) = load_profile_bytes_by_name(&file_name) {
+            if let Some(ramp) = parse_icc_ramp(&bytes) {
+                return Some(ramp);
+            }
+        }
+    }
+
+    None
+}
+
+/// Restore each active display's hardware gamma LUT back to its configured/Windows ICC profile
+/// (or linear identity ramp if no calibrated profile is active).
+pub fn restore_active_icc_ramps_for_all_devices() -> bool {
+    let devices = enumerate_active_display_devices();
+    if devices.is_empty() {
+        return false;
+    }
+    for dev in devices {
+        if let Some(ramp) = get_effective_base_ramp_for_device(&dev) {
+            let ok = apply_hardware_ramp_for_device(&dev, &ramp);
+            crate::log_info!(
+                "COLOR_CAL",
+                "Restored active ICC hardware gamma ramp for {} -> ok={}",
+                dev,
+                ok
+            );
+        } else {
+            let _ = apply_hardware_ramp_for_device(&dev, &identity_ramp());
+        }
+    }
+    true
 }
 
 /// Initialize color calibration environment on system startup:
